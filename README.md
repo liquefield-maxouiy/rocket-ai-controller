@@ -1,28 +1,28 @@
 # Rocket AI Controller
 
-Нейросетевая система управления ракетой на ESP32.
+Neural network rocket control system for ESP32.
 
-## Характеристики
+## Specifications
 
-- **Модель:** Полносвязная нейросеть (45,733 параметра)
-- **Входы:** 11 параметров (кватернион, угловая скорость, ускорение, угол отклонения)
-- **Выходы:** 3 (pitch, yaw, roll)
-- **Размер модели:** ~179 КБ (float32)
-- **Платформа:** ESP32
+- **Model:** Fully connected neural network (45,733 parameters)
+- **Inputs:** 11 parameters (quaternion, angular velocity, acceleration, deflection angle)
+- **Outputs:** 3 (pitch, yaw, roll)
+- **Model size:** ~179 KB (float32)
+- **Platform:** ESP32
 
-##  Структура проекта
+## Project Structure
 
 ```
 rocket_ai/
-├── sim.py              # Генерация данных
-├── train.py            # Обучение модели
-├── export.py           # Экспорт в C++ для ESP32
-├── rocket_controller.ino # Прошивка для ESP32
-├── rocket_model.h      # Веса модели (генерируется)
-└── requirements.txt    # Зависимости Python
+├── sim.py              # Data generation
+├── train.py            # Model training
+├── export.py           # Export to C++ for ESP32
+├── rocket_controller.ino # Firmware for ESP32
+├── rocket_model.h      # Model weights (generated)
+└── requirements.txt    # Python dependencies
 ```
 
-##  Установка
+## Installation
 
 ```bash
 git clone https://github.com/liquefield-maxouiy/rocket-ai-controller.git
@@ -32,14 +32,14 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## Использование
+## Usage
 
-1. Генерация данных: `python sim.py`
-2. Обучение: `python train.py`
-3. Экспорт: `python export.py`
-4. Залейте `rocket_controller.ino` на ESP32
+1. Generate data: `python sim.py`
+2. Training: `python train.py`
+3. Export: `python export.py`
+4. Upload `rocket_controller.ino` to ESP32
 
-## Датчики
+## Sensors
 
-- MPU6050 (гироскоп + акселерометр)
-- BMP280 (барометр)
+- MPU6050 (gyroscope + accelerometer)
+- BMP280 (barometer)
