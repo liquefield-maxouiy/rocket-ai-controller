@@ -3,7 +3,7 @@
 #include <Adafruit_BMP280.h>
 #include <ESP32Servo.h>
 #include <MPU6050.h>
-#include "rocket_model.h"
+#include "rocket_model_int8.h"
 
 #define NUM_INPUTS   11
 #define NUM_HIDDEN1  200
@@ -28,6 +28,9 @@ float altitude, temperature;
 
 float qx = 0.0, qy = 0.0, qz = 0.0, qw = 1.0;
 
+// ============================================================
+// complementary filter (fast, no external deps)
+// ============================================================
 void update_filter(float gx, float gy, float gz, float ax, float ay, float az, float dt) {
     float acc_norm = sqrt(ax*ax + ay*ay + az*az);
     if (acc_norm < 0.001) return;
@@ -103,62 +106,85 @@ void denormalize_output(float *norm_output, float *output) {
     }
 }
 
-void predict(float *input, float *output) {
-    float hidden1[NUM_HIDDEN1];
-    float hidden2[NUM_HIDDEN2];
-    float hidden3[NUM_HIDDEN3];
+// ============================================================
+// INT8 FORWARD PASS (fast, low memory)
+// ============================================================
+void predict_int8(float *input, float *output) {
+    int32_t hidden1[NUM_HIDDEN1];
+    int32_t hidden2[NUM_HIDDEN2];
+    int32_t hidden3[NUM_HIDDEN3];
 
+    // quantize input to int8
+    int8_t input_q[NUM_INPUTS];
+    for (int i = 0; i < NUM_INPUTS; i++) {
+        input_q[i] = (int8_t)(input[i] * 127.0f);
+    }
+
+    // layer 1
     for (int i = 0; i < NUM_HIDDEN1; i++) {
-        float sum = fc1_bias[i];
-        for (int j = 0; j < NUM_INPUTS; j++) sum += fc1_weight[i][j] * input[j];
+        int32_t sum = fc1_bias[i];
+        for (int j = 0; j < NUM_INPUTS; j++) {
+            sum += fc1_weight[i * NUM_INPUTS + j] * input_q[j];
+        }
         hidden1[i] = sum;
     }
-    float mean1 = 0, var1 = 0;
-    for (int i = 0; i < NUM_HIDDEN1; i++) mean1 += hidden1[i];
-    mean1 /= NUM_HIDDEN1;
-    for (int i = 0; i < NUM_HIDDEN1; i++) var1 += (hidden1[i] - mean1) * (hidden1[i] - mean1);
-    var1 /= NUM_HIDDEN1;
-    float inv_std1 = 1.0f / sqrt(var1 + ln1_EPS);
+
+    float hidden1_f[NUM_HIDDEN1];
     for (int i = 0; i < NUM_HIDDEN1; i++) {
-        hidden1[i] = relu(ln1_gamma[i] * (hidden1[i] - mean1) * inv_std1 + ln1_beta[i]);
+        float val = hidden1[i] * fc1_scale;
+        hidden1_f[i] = (val > 0) ? val : 0;
     }
 
+    // layer 2
+    int32_t hidden2_int[NUM_HIDDEN2];
     for (int i = 0; i < NUM_HIDDEN2; i++) {
-        float sum = fc2_bias[i];
-        for (int j = 0; j < NUM_HIDDEN1; j++) sum += fc2_weight[i][j] * hidden1[j];
-        hidden2[i] = sum;
-    }
-    float mean2 = 0, var2 = 0;
-    for (int i = 0; i < NUM_HIDDEN2; i++) mean2 += hidden2[i];
-    mean2 /= NUM_HIDDEN2;
-    for (int i = 0; i < NUM_HIDDEN2; i++) var2 += (hidden2[i] - mean2) * (hidden2[i] - mean2);
-    var2 /= NUM_HIDDEN2;
-    float inv_std2 = 1.0f / sqrt(var2 + ln2_EPS);
-    for (int i = 0; i < NUM_HIDDEN2; i++) {
-        hidden2[i] = relu(ln2_gamma[i] * (hidden2[i] - mean2) * inv_std2 + ln2_beta[i]);
+        int32_t sum = fc2_bias[i];
+        for (int j = 0; j < NUM_HIDDEN1; j++) {
+            int8_t h1_q = (int8_t)(hidden1_f[j] / fc1_scale * 127.0f);
+            sum += fc2_weight[i * NUM_HIDDEN1 + j] * h1_q;
+        }
+        hidden2_int[i] = sum;
     }
 
-    for (int i = 0; i < NUM_HIDDEN3; i++) {
-        float sum = fc3_bias[i];
-        for (int j = 0; j < NUM_HIDDEN2; j++) sum += fc3_weight[i][j] * hidden2[j];
-        hidden3[i] = sum;
+    float hidden2_f[NUM_HIDDEN2];
+    for (int i = 0; i < NUM_HIDDEN2; i++) {
+        float val = hidden2_int[i] * fc2_scale;
+        hidden2_f[i] = (val > 0) ? val : 0;
     }
-    float mean3 = 0, var3 = 0;
-    for (int i = 0; i < NUM_HIDDEN3; i++) mean3 += hidden3[i];
-    mean3 /= NUM_HIDDEN3;
-    for (int i = 0; i < NUM_HIDDEN3; i++) var3 += (hidden3[i] - mean3) * (hidden3[i] - mean3);
-    var3 /= NUM_HIDDEN3;
-    float inv_std3 = 1.0f / sqrt(var3 + ln3_EPS);
+
+    // layer 3
+    int32_t hidden3_int[NUM_HIDDEN3];
     for (int i = 0; i < NUM_HIDDEN3; i++) {
-        hidden3[i] = relu(ln3_gamma[i] * (hidden3[i] - mean3) * inv_std3 + ln3_beta[i]);
+        int32_t sum = fc3_bias[i];
+        for (int j = 0; j < NUM_HIDDEN2; j++) {
+            int8_t h2_q = (int8_t)(hidden2_f[j] / fc2_scale * 127.0f);
+            sum += fc3_weight[i * NUM_HIDDEN2 + j] * h2_q;
+        }
+        hidden3_int[i] = sum;
+    }
+
+    float hidden3_f[NUM_HIDDEN3];
+    for (int i = 0; i < NUM_HIDDEN3; i++) {
+        float val = hidden3_int[i] * fc3_scale;
+        hidden3_f[i] = (val > 0) ? val : 0;
+    }
+
+    // output layer
+    int32_t output_int[NUM_OUTPUTS];
+    for (int i = 0; i < NUM_OUTPUTS; i++) {
+        int32_t sum = fc4_bias[i];
+        for (int j = 0; j < NUM_HIDDEN3; j++) {
+            int8_t h3_q = (int8_t)(hidden3_f[j] / fc3_scale * 127.0f);
+            sum += fc4_weight[i * NUM_HIDDEN3 + j] * h3_q;
+        }
+        output_int[i] = sum;
     }
 
     float raw_output[NUM_OUTPUTS];
     for (int i = 0; i < NUM_OUTPUTS; i++) {
-        float sum = fc4_bias[i];
-        for (int j = 0; j < NUM_HIDDEN3; j++) sum += fc4_weight[i][j] * hidden3[j];
-        raw_output[i] = tanh_approx(sum);
+        raw_output[i] = tanh_approx(output_int[i] * fc4_scale);
     }
+
     denormalize_output(raw_output, output);
 }
 
@@ -189,13 +215,13 @@ void read_mpu() {
 void setup() {
     Serial.begin(115200);
     delay(1000);
-    Serial.println("rocket ai started");
+    Serial.println("rocket ai int8 controller started");
 
     Wire.begin();
     Wire.setClock(400000);
 
     if (!bmp.begin(0x76)) {
-        Serial.println("bmp280 not found");
+        Serial.println("bmp280 not found at 0x76");
         if (!bmp.begin(0x77)) Serial.println("bmp280 not found at 0x77");
         else Serial.println("bmp280 found at 0x77");
     } else {
@@ -216,6 +242,7 @@ void setup() {
     servo4.write(90);
     delay(500);
     Serial.println("servos ready");
+    Serial.println("all systems ready (int8)");
 }
 
 void loop() {
@@ -232,7 +259,7 @@ void loop() {
     normalize_input(sensor_data, normalized_input);
 
     float actions[NUM_OUTPUTS];
-    predict(normalized_input, actions);
+    predict_int8(normalized_input, actions);
 
     float pitch = actions[0];
     float yaw   = actions[1];
@@ -260,6 +287,7 @@ void loop() {
     Serial.print(" yaw "); Serial.print(yaw, 3);
     Serial.print(" roll "); Serial.print(roll, 3);
     Serial.print(" alt "); Serial.print(altitude, 1);
+    Serial.print(" temp "); Serial.print(temperature, 1);
     Serial.print(" servos ");
     Serial.print(servo1_pwm); Serial.print(" ");
     Serial.print(servo2_pwm); Serial.print(" ");
