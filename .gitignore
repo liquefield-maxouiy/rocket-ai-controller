@@ -1,0 +1,103 @@
+# Виртуальное окружение
+venv/
+env/
+.venv/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Данные и логи
+*.log
+*.log.gz
+*.pth
+*.h5
+*.pt
+*.onnx
+*.tflite
+*.pb
+*.meta
+*.index
+*.data-*
+*.ckpt
+
+# Модели и веса
+rocket_best.pth
+rocket_model_full.h5
+rocket_model_int8.tflite
+rocket_model.tflite
+rocket_model.h
+rocket_model.ino
+scaler_params.json
+training_history.png
+*.h
+
+# Данные с датчиков
+*.csv
+*.json
+*.npz
+*.npy
+*.pickle
+*.pkl
+
+# Временные файлы
+*.tmp
+*.swp
+*.swo
+*.bak
+*~
+
+# IDE и редакторы
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+*.user
+*.userprefs
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# PyTorch
+*.pth
+*.pt
+*.onnx
+
+# TensorFlow
+*.pb
+*.meta
+*.index
+*.data-*
+*.ckpt
+
+# Сборка и компиляция
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Логи обучения
+logs/
+*.log
+*.out
+*.err
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Тестовые файлы
+test_*.py
+*_test.py
