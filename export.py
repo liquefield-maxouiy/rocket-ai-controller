@@ -2,13 +2,29 @@ import torch
 import numpy as np
 import json
 
-# Загрузка чекпоинта
+# ============================================================
+# ЗАГРУЗКА ЧЕКПОИНТА
+# ============================================================
 checkpoint = torch.load('rocket_best.pth', map_location='cpu', weights_only=False)
 state_dict = checkpoint['model_state_dict']
 scaler_X = checkpoint['scaler_X']
 scaler_y = checkpoint['scaler_y']
 
-# Экспорт .h
+# ============================================================
+# ОПРЕДЕЛЯЕМ СПИСКИ (ОБЯЗАТЕЛЬНО!)
+# ============================================================
+features = [
+    'quat_x', 'quat_y', 'quat_z', 'quat_w',
+    'omega_x', 'omega_y', 'omega_z',
+    'acc_x', 'acc_y', 'acc_z',
+    'angle_deg'
+]
+
+targets = ['action_pitch', 'action_yaw', 'action_roll']
+
+# ============================================================
+# ЭКСПОРТ .h
+# ============================================================
 def export_linear_layer_c(f, layer_name, weight, bias):
     out_features, in_features = weight.shape
     f.write(f"// {layer_name}: Linear({in_features}, {out_features})\n")
@@ -51,7 +67,7 @@ def export_layernorm_c(f, layer_name, weight, bias, eps=1e-5):
 
 # Открываем файл на запись
 with open('rocket_model.h', 'w') as f:
-    f.write("/* Модель управления ракетой для ESP32 */\n\n")
+    f.write("/* Rocket AI Controller - Neural Network Weights */\n\n")
     f.write("#ifndef ROCKET_MODEL_H\n")
     f.write("#define ROCKET_MODEL_H\n\n")
     f.write("#include <Arduino.h>\n\n")
@@ -82,25 +98,44 @@ with open('rocket_model.h', 'w') as f:
                           state_dict['fc4.weight'].numpy(),
                           state_dict['fc4.bias'].numpy())
 
-    # Параметры нормализации
-    features = ['quat_x', 'quat_y', 'quat_z', 'quat_w',
-                'omega_x', 'omega_y', 'omega_z',
-                'acc_x', 'acc_y', 'acc_z', 'angle_deg']
-
-    f.write("const float scaler_X_mean[12] = {")
+    # ============================================================
+    # НОРМАЛИЗАЦИЯ ВХОДА (11 параметров)
+    # ============================================================
+    f.write("// Input normalization (11 features)\n")
+    f.write(f"const float scaler_X_mean[{len(features)}] = {{")
     for i, val in enumerate(scaler_X.mean_):
         f.write(f"{val:.8f}")
-        if i < 11:
+        if i < len(features) - 1:
             f.write(", ")
     f.write("};\n")
 
-    f.write("const float scaler_X_scale[12] = {")
+    f.write(f"const float scaler_X_scale[{len(features)}] = {{")
     for i, val in enumerate(scaler_X.scale_):
         f.write(f"{val:.8f}")
-        if i < 11:
+        if i < len(features) - 1:
+            f.write(", ")
+    f.write("};\n\n")
+
+    # ============================================================
+    # ДЕНОРМАЛИЗАЦИЯ ВЫХОДА (3 действия)
+    # ============================================================
+    f.write("// Output denormalization (3 actions)\n")
+    f.write(f"const float scaler_y_mean[{len(targets)}] = {{")
+    for i, val in enumerate(scaler_y.mean_):
+        f.write(f"{val:.8f}")
+        if i < len(targets) - 1:
+            f.write(", ")
+    f.write("};\n")
+
+    f.write(f"const float scaler_y_scale[{len(targets)}] = {{")
+    for i, val in enumerate(scaler_y.scale_):
+        f.write(f"{val:.8f}")
+        if i < len(targets) - 1:
             f.write(", ")
     f.write("};\n\n")
 
     f.write("#endif\n")
 
-print("rocket_model.h создан")
+print("✅ rocket_model.h created")
+print(f"📊 Features: {len(features)} ({', '.join(features)})")
+print(f"📊 Targets: {len(targets)} ({', '.join(targets)})")
