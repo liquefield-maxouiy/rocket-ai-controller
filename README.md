@@ -1,3 +1,6 @@
+### ЭТА ВЕРСИЯ НЕ ЭКОНОМИТ СКОРОСТЬ, А ЛИШЬ ЭКОНОМИТ ПАМЯТЬ
+
+
 # 🚀 Rocket AI Controller (INT8 Edition)
 
 > **Neural network rocket control system for low-power microcontrollers.**  
