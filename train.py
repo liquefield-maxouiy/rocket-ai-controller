@@ -279,7 +279,7 @@ print(f"   Лучший Val Loss: {best_val_loss:.6f}")
 print("\n Оценка на тестовом наборе:")
 print("=" * 60)
 
-checkpoint = torch.load('rocket_best.pth')
+checkpoint = torch.load('rocket_best.pth', map_location='cpu', weights_only=False)
 model.load_state_dict(checkpoint['model_state_dict'])
 model.eval()
 

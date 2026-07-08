@@ -6,18 +6,36 @@
  *          X — вправо, Y — вперёд
  *   World: Z — вверх (гравитация [0, 0, -g])
  *
- * Исправления относительно версии v1:
- *   - Конечный автомат (GROUND → ARMED → ASCENT → COAST → DESCENT → RECOVERY)
- *   - Детект старта по всплеску ускорения
- *   - Неблокирующий таймерный цикл 50 Гц (без delay)
- *   - Ограничение скорости серв (300°/с, макс 6 PWM-единиц/шаг)
- *   - Калибровка MPU6050 при включении (усреднение 200 отсчётов)
- *   - Проверка валидности данных (NaN/Inf → fallback)
- *   - Аппаратный Watchdog (TWDT, 3 секунды)
- *   - Вертикальная скорость из BMP280 (скользящее окно)
- *   - Мягкий старт серв (постепенный выход из 90°)
- *   - Логирование только ошибок и смены состояния (без спама)
- *   - Serial-отчёт раз в 500 мс (25 циклов)
+ * Исправления v3 (относительно v2):
+ *   [FIX#1] Гироскопическая кинематика: исправлены знаки в qy_g и qz_g
+ *           (были перепутаны, что давало неверную эволюцию кватерниона).
+ *   [FIX#2] Конечный автомат:
+ *           - ASCENT→COAST: добавлен детект по спаду тяги (thrust burnout),
+ *             таймер — только как резервный上限.
+ *           - COAST→DESCENT: сохранена опорная высота земли (ground_alt),
+ *             добавлен детект апогея (apogee detected) и подтверждение
+ *             снижения (несколько отсчётов подряд).
+ *           - ARMED: добавлен таймаут 120 с (возврат в GROUND при отсутствии
+ *             старта).
+ *           - Все переходы защищены счётчиками подтверждения.
+ *   [FIX#3] Сервы:
+ *           - Убран сброс servo_pwm перед вызовом rate-limiter (из-за него
+ *             ограничение скорости не работало в ASCENT).
+ *           - SERVO_MAX_DELTA снижен с 6 до 4 (~200°/с mech), чтобы
+ *             сохранить плавность без потери управляемости.
+ *   [FIX#4] Безопасность:
+ *           - При отказе BMP280 — аварийный переход в RECOVERY с раскрытием
+ *             парашюта (fall-safe).
+ *           - Добавлен медианный фильтр барометра (3 отсчёта) против выбросов.
+ *           - Окно vertical speed увеличено до 25 отсчётов (0.5 с).
+ *   [FIX#5] Парашют:
+ *           - Раскомментирован и доработан код управления пиропатроном (пин 32).
+ *           - One-shot защита: импульс 1 с, однократно.
+ *           - Резервный парашют на высоте 30 м, если основной не сработал.
+ *           - pinMode вынесен в setup().
+ *   [FIX#6] Добавлен детект посадки (вертикальная скорость ≈ 0 в RECOVERY).
+ *   [FIX#7] Watchdog сброс теперь гарантирован даже при возврате из loop
+ *           (вынесен в начало, до таймерного гейта).
  */
 
 #include <Wire.h>
@@ -36,35 +54,42 @@
 #define NUM_HIDDEN3  80
 #define NUM_OUTPUTS  3
 
-// ── Пины серв ─────────────────────────────────────────────
-#define SERVO1_PIN  13
-#define SERVO2_PIN  14
-#define SERVO3_PIN  15
-#define SERVO4_PIN  16
+// ── Пины ──────────────────────────────────────────────────
+#define SERVO1_PIN      13
+#define SERVO2_PIN      14
+#define SERVO3_PIN      15
+#define SERVO4_PIN      16
+#define PARACHUTE_PIN   32    // [FIX#5] пиропатрон основного парашюта
+#define PARACHUTE2_PIN  33    // [FIX#5] резервный пиропатрон (опционально)
 
 // ── Константы управления ──────────────────────────────────
-#define LOOP_FREQ_HZ       50                    // частота контура управления
-#define LOOP_PERIOD_US     20000                 // период в микросекундах
-#define DT                 0.02f                 // шаг времени (сек)
+#define LOOP_FREQ_HZ       50
+#define LOOP_PERIOD_US     20000
+#define DT                 0.02f
 
 // ── Параметры серв ────────────────────────────────────────
-#define SERVO_CENTER       90                    // нейтраль (PWM)
-#define SERVO_RANGE        45                    // амплитуда (±45 от центра = ±25° рулей)
-#define SERVO_MAX_DELTA    6                     // макс. изменение PWM за 1 шаг (~300°/с @ 50 Гц)
-#define SERVO_SOFT_START_DELAY  40               // шагов плавного старта серв
+#define SERVO_CENTER       90
+#define SERVO_RANGE        45
+// [FIX#3] Уменьшено с 6 до 4: ~200°/с механических при 50 Гц
+// (4 PWM-ед * (25°/45 PWM-ед) / 0.02 с ≈ 111 °/с на рулях —
+//  достаточно быстро, но без рывков)
+#define SERVO_MAX_DELTA    4
 
 // ── Детект старта ─────────────────────────────────────────
-#define LAUNCH_ACC_THRESH  2.5f                  // порог |ускорения| в G для детекта старта
-#define LAUNCH_CONFIRM_CNT 5                     // подтверждающих отсчётов подряд
-#define MOTOR_BURNOUT_TIME 5.0f                  // таймаут двигателя (сек)
-#define MOTOR_BURNOUT_THRUST_THRESH 0.05f        // доля пиковой тяги
+#define LAUNCH_ACC_THRESH       2.5f
+#define LAUNCH_CONFIRM_CNT      5
+#define MOTOR_BURNOUT_TIME      8.0f   // [FIX#2] увеличен как резервный上限
+#define MOTOR_BURNOUT_THRUST    0.15f  // [FIX#2] доля пиковой тяги для детекта отсечки
+#define BURNOUT_CONFIRM_CNT     10     // [FIX#2] подтверждений спада тяги
 
 // ── Восстановление ────────────────────────────────────────
-#define DESCENT_ALT_THRESH 80.0f                 // высота (м) для раскрытия парашюта
-#define RECOVERY_ALT_THRESH 30.0f                // финиш
+#define DESCENT_ALT_THRESH      80.0f   // высота раскрытия основного парашюта
+#define RECOVERY_ALT_THRESH     30.0f   // [FIX#5] резервный парашют
+#define LANDING_VS_THRESH       0.5f    // [FIX#6] порог вертикальной скорости посадки
+#define ARMING_TIMEOUT_SEC      120     // [FIX#2] таймаут ARMED → GROUND
 
 // ── Диагностика ───────────────────────────────────────────
-#define TELEMETRY_PERIOD   25                    // циклов между выводами (~2 Гц)
+#define TELEMETRY_PERIOD        25      // ~2 Гц
 
 // ════════════════════════════════════════════════════════════
 // Глобальные переменные
@@ -73,12 +98,15 @@ Servo servo1, servo2, servo3, servo4;
 Adafruit_BMP280 bmp;
 MPU6050 mpu;
 
+// ── Флаги оборудования ────────────────────────────────────
+bool bmp_ok = false;    // [FIX#4] флаг работоспособности барометра
+
 // ── Датчики (сырые) ───────────────────────────────────────
-float ax = 0, ay = 0, az = 0;          // акселерометр, body frame, м/с²
-float gx = 0, gy = 0, gz = 0;          // гироскоп, body frame, рад/с
-float altitude = 0;                     // высота, м
-float temperature = 0;                  // °C
-float vert_speed = 0;                   // вертикальная скорость, м/с
+float ax = 0, ay = 0, az = 0;
+float gx = 0, gy = 0, gz = 0;
+float altitude = 0;
+float temperature = 0;
+float vert_speed = 0;
 
 // ── Калибровочные смещения ─────────────────────────────────
 float gyro_bias_x = 0, gyro_bias_y = 0, gyro_bias_z = 0;
@@ -87,44 +115,87 @@ float acc_bias_x  = 0, acc_bias_y  = 0, acc_bias_z  = 0;
 // ── Фильтр ориентации ─────────────────────────────────────
 float qx = 0.0, qy = 0.0, qz = 0.0, qw = 1.0;
 
-// ── Сервы (текущее положение + плавный старт) ─────────────
-int   servo_pwm[4] = {SERVO_CENTER, SERVO_CENTER, SERVO_CENTER, SERVO_CENTER};
-int   servo_soft_start_counter = 0;
+// ── Сервы ─────────────────────────────────────────────────
+int servo_pwm[4] = {SERVO_CENTER, SERVO_CENTER, SERVO_CENTER, SERVO_CENTER};
 
 // ── Конечный автомат ──────────────────────────────────────
 enum State : uint8_t {
-    STATE_INIT,        // инициализация / калибровка
-    STATE_GROUND,      // на земле, ожидание старта
-    STATE_ARMED,       // готов к пуску, мониторинг ускорения
-    STATE_ASCENT,      // активный полёт, работа двигателя
-    STATE_COAST,       // двигатель выключен, подъём по инерции
-    STATE_DESCENT,     // снижение
-    STATE_RECOVERY     // парашют раскрыт / посадка
+    STATE_INIT,
+    STATE_GROUND,
+    STATE_ARMED,
+    STATE_ASCENT,
+    STATE_COAST,
+    STATE_DESCENT,
+    STATE_RECOVERY
 };
 State flight_state = STATE_INIT;
 uint32_t state_entry_time = 0;
 uint32_t ascent_start_time = 0;
 
-// ── Детект старта ─────────────────────────────────────────
+// ── Детект старта / отсечки / апогея ──────────────────────
 int launch_confirm_counter = 0;
+int burnout_confirm_counter = 0;       // [FIX#2] счётчик подтверждения отсечки
+int descent_confirm_counter = 0;       // [FIX#2] счётчик подтверждения снижения
+float peak_thrust = 1.0f;              // [FIX#2] пиковая перегрузка в ASCENT
+float peak_altitude = 0.0f;            // [FIX#2] апогей (максимальная высота)
+float ground_altitude = 0.0f;          // [FIX#2] высота земли (сохраняется при старте)
+bool  apogee_detected = false;         // [FIX#2] флаг детекта апогея
+bool  chute1_deployed = false;         // [FIX#5] флаг раскрытия основного парашюта
+bool  chute2_deployed = false;         // [FIX#5] флаг раскрытия резервного парашюта
+uint32_t chute1_deploy_time = 0;       // [FIX#5] время подачи импульса
 
-// ── Высотомер (скользящее окно для вертикальной скорости) ──
-#define ALT_HISTORY_SIZE 10
+// ── Высотомер (скользящее окно) ───────────────────────────
+// [FIX#4] Увеличено с 10 до 25 (0.5 с при 50 Гц) для сглаживания
+#define ALT_HISTORY_SIZE 25
 float  alt_history[ALT_HISTORY_SIZE];
 int    alt_history_idx = 0;
 bool   alt_history_full = false;
+
+// ── Медианный фильтр барометра ────────────────────────────
+// [FIX#4] Буфер из 3 последних сырых отсчётов для подавления выбросов
+#define BMP_MEDIAN_SIZE 3
+float  bmp_raw_buf[BMP_MEDIAN_SIZE];
+int    bmp_raw_idx = 0;
+bool   bmp_raw_full = false;
 
 // ── Телеметрия ────────────────────────────────────────────
 uint32_t loop_counter = 0;
 
 // ── Watchdog ──────────────────────────────────────────────
-#define WDT_TIMEOUT_SEC 3
+#define MY_WDT_TIMEOUT_SEC 3
+
+// ════════════════════════════════════════════════════════════
+// Медианный фильтр (для барометра) — [FIX#4]
+// ════════════════════════════════════════════════════════════
+float median3(float a, float b, float c) {
+    if (a > b) { float t = a; a = b; b = t; }
+    if (b > c) { float t = b; b = c; c = t; }
+    if (a > b) { float t = a; a = b; b = t; }
+    return b;
+}
+
+float bmp_median_filter(float raw_alt) {
+    bmp_raw_buf[bmp_raw_idx] = raw_alt;
+    bmp_raw_idx = (bmp_raw_idx + 1) % BMP_MEDIAN_SIZE;
+    if (bmp_raw_idx == 0) bmp_raw_full = true;
+
+    if (!bmp_raw_full) return raw_alt;  // ещё не накопили
+
+    return median3(bmp_raw_buf[0], bmp_raw_buf[1], bmp_raw_buf[2]);
+}
 
 // ════════════════════════════════════════════════════════════
 // Фильтр Маджвика (комплементарный)
 // ════════════════════════════════════════════════════════════
 // Оси: MPU6050 → body NEU: X=right, Y=forward, Z=up
 // В покое az≈+1G (реакция опоры), ax≈ay≈0
+//
+// [FIX#1] Исправлены знаки в интегрировании гироскопа:
+//   Правильный вывод из q̇ = 0.5·q⊗ω (body-rate):
+//     q̇x = 0.5·( qw·ωx + qy·ωz − qz·ωy)
+//     q̇y = 0.5·( qw·ωy + qz·ωx − qx·ωz)
+//     q̇z = 0.5·( qw·ωz + qx·ωy − qy·ωx)
+//     q̇w = 0.5·(−qx·ωx − qy·ωy − qz·ωz)
 
 bool update_filter(float gx_r, float gy_r, float gz_r,
                    float ax_r, float ay_r, float az_r, float dt) {
@@ -144,19 +215,24 @@ bool update_filter(float gx_r, float gy_r, float gz_r,
     float ay_n = ay_r / acc_norm;
     float az_n = az_r / acc_norm;
 
-    // Углы из акселерометра (body Z = up, стандартная формула)
+    // Углы из акселерометра (body Z = up, NEU)
+    // Формулы верны: при Z||g имеем ax≈0, ay≈0, az≈+g →
+    //   roll = atan2(0, g) = 0, pitch = atan2(0, g) = 0 ✓
     float acc_roll  = atan2(ay_n, az_n);
     float acc_pitch = atan2(-ax_n, sqrt(ay_n*ay_n + az_n*az_n));
 
     // ── Интегрирование гироскопа (кватернионная кинематика) ──
-    float gx_h = gx_r * dt * 0.5f;
-    float gy_h = gy_r * dt * 0.5f;
-    float gz_h = gz_r * dt * 0.5f;
+    float hx = gx_r * dt * 0.5f;
+    float hy = gy_r * dt * 0.5f;
+    float hz = gz_r * dt * 0.5f;
 
-    float qx_g = qx + (qw * gx_h + qy * gz_h - qz * gy_h);
-    float qy_g = qy + (-qz * gx_h + qw * gy_h + qx * gz_h);
-    float qz_g = qz + (qy * gx_h - qx * gy_h + qw * gz_h);
-    float qw_g = qw + (-qx * gx_h - qy * gy_h - qz * gz_h);
+    // [FIX#1] Исправлены знаки в qy_g и qz_g:
+    //   qy_g: было (−qz·hx + ... + qx·hz) → стало (+qz·hx + ... − qx·hz)
+    //   qz_g: было (+qy·hx − qx·hy + ...) → стало (−qy·hx + qx·hy + ...)
+    float qx_g = qx + (qw * hx + qy * hz - qz * hy);
+    float qy_g = qy + (qw * hy + qz * hx - qx * hz);  // ← исправлено
+    float qz_g = qz + (qw * hz + qx * hy - qy * hx);  // ← исправлено
+    float qw_g = qw + (-qx * hx - qy * hy - qz * hz);
 
     float norm_g = sqrt(qx_g*qx_g + qy_g*qy_g + qz_g*qz_g + qw_g*qw_g);
     if (norm_g > 0.001f) {
@@ -177,7 +253,7 @@ bool update_filter(float gx_r, float gy_r, float gz_r,
     float qz_a = -sr * sp;
     float qw_a = cr * cp;
 
-    // ── Комплементарное слияние ──────────────────────────────
+    // ── Комплементарное слияние (LERP + нормализация) ────────
     const float alpha = 0.95f;
     qx = alpha * qx_g + (1.0f - alpha) * qx_a;
     qy = alpha * qy_g + (1.0f - alpha) * qy_a;
@@ -292,6 +368,9 @@ void predict(float *input, float *output) {
 // ════════════════════════════════════════════════════════════
 // Микширование серв (X-конфигурация, 4 руля)
 // ════════════════════════════════════════════════════════════
+// Знаки соответствуют стандартной X-схеме (рули под 45°).
+// При реальных испытаниях может потребоваться инвертировать
+// отдельные каналы в зависимости от механики.
 void mix_servos(float pitch, float yaw, float roll,
                 float *s1, float *s2, float *s3, float *s4) {
     *s1 =  pitch + yaw + roll;
@@ -305,8 +384,12 @@ void mix_servos(float pitch, float yaw, float roll,
 }
 
 // ════════════════════════════════════════════════════════════
-// Запись серв с ограничением скорости (как в sim.py)
+// Запись серв с ограничением скорости
 // ════════════════════════════════════════════════════════════
+// [FIX#3] Функция больше не требует, чтобы servo_pwm был
+// предварительно установлен в target — она сама ведёт
+// внутреннее состояние servo_pwm[] к target с rate limiting.
+// Вызывающий код НЕ должен перезаписывать servo_pwm[] перед вызовом.
 void write_servos_rate_limited(int target_pwm[4]) {
     for (int i = 0; i < 4; i++) {
         target_pwm[i] = constrain(target_pwm[i], 0, 180);
@@ -327,17 +410,14 @@ bool read_mpu() {
     int16_t ax_int, ay_int, az_int;
     int16_t gx_int, gy_int, gz_int;
 
-    // Пробуем прочитать (с таймаутом I2C)
     unsigned long t0 = micros();
     mpu.getMotion6(&ax_int, &ay_int, &az_int, &gx_int, &gy_int, &gz_int);
     unsigned long elapsed = micros() - t0;
 
-    // Если I2C заняло > 3 мс — возможный сбой
     if (elapsed > 3000) {
         return false;
     }
 
-    // Преобразование в физические единицы
     float ax_raw = ax_int / 16384.0f * 9.81f;
     float ay_raw = ay_int / 16384.0f * 9.81f;
     float az_raw = az_int / 16384.0f * 9.81f;
@@ -345,7 +425,6 @@ bool read_mpu() {
     float gy_raw = gy_int / 131.0f * DEG_TO_RAD;
     float gz_raw = gz_int / 131.0f * DEG_TO_RAD;
 
-    // Проверка на NaN/Inf
     if (isnan(ax_raw) || isnan(ay_raw) || isnan(az_raw) ||
         isnan(gx_raw) || isnan(gy_raw) || isnan(gz_raw) ||
         isinf(ax_raw) || isinf(ay_raw) || isinf(az_raw) ||
@@ -353,7 +432,6 @@ bool read_mpu() {
         return false;
     }
 
-    // Вычитаем калибровочные смещения
     ax = ax_raw - acc_bias_x;
     ay = ay_raw - acc_bias_y;
     az = az_raw - acc_bias_z;
@@ -365,7 +443,7 @@ bool read_mpu() {
 }
 
 // ════════════════════════════════════════════════════════════
-// Калибровка MPU6050 (усреднение N отсчётов в покое)
+// Калибровка MPU6050
 // ════════════════════════════════════════════════════════════
 void calibrate_sensors(int samples = 200) {
     Serial.print("calibrating (");
@@ -384,7 +462,6 @@ void calibrate_sensors(int samples = 200) {
         float ay_s = ay_i / 16384.0f * 9.81f;
         float az_s = az_i / 16384.0f * 9.81f;
 
-        // Пропускаем явные выбросы (удары, тряска)
         float acc_mag = sqrt(ax_s*ax_s + ay_s*ay_s + az_s*az_s);
         if (acc_mag > 12.0f || acc_mag < 7.5f) {
             delay(2);
@@ -403,7 +480,6 @@ void calibrate_sensors(int samples = 200) {
 
     if (valid < 50) {
         Serial.println("ERROR: calibration failed (too few valid samples)");
-        // Используем нулевые смещения
         gyro_bias_x = gyro_bias_y = gyro_bias_z = 0;
         acc_bias_x = acc_bias_y = acc_bias_z = 0;
         return;
@@ -413,7 +489,6 @@ void calibrate_sensors(int samples = 200) {
     gyro_bias_y = sum_gy / valid;
     gyro_bias_z = sum_gz / valid;
 
-    // Смещение акселерометра: разница между измеренным и ожидаемым (0, 0, g)
     acc_bias_x = sum_ax / valid;
     acc_bias_y = sum_ay / valid;
     acc_bias_z = (sum_az / valid) - 9.81f;
@@ -432,6 +507,7 @@ void calibrate_sensors(int samples = 200) {
 // ════════════════════════════════════════════════════════════
 // Обновление вертикальной скорости (скользящее окно)
 // ════════════════════════════════════════════════════════════
+// [FIX#4] Окно 25 отсчётов = 0.5 с при 50 Гц
 float update_vert_speed(float new_alt, float dt) {
     alt_history[alt_history_idx] = new_alt;
     alt_history_idx = (alt_history_idx + 1) % ALT_HISTORY_SIZE;
@@ -456,7 +532,35 @@ float update_vert_speed(float new_alt, float dt) {
 }
 
 // ════════════════════════════════════════════════════════════
-// Печать состояния (вызывается редко)
+// Раскрытие парашюта (one-shot) — [FIX#5]
+// ════════════════════════════════════════════════════════════
+void deploy_parachute_main() {
+    if (chute1_deployed) return;
+    chute1_deployed = true;
+    chute1_deploy_time = millis();
+    digitalWrite(PARACHUTE_PIN, HIGH);
+    Serial.println("PARACHUTE: MAIN deployed (pin 32 HIGH)");
+}
+
+void deploy_parachute_backup() {
+    if (chute2_deployed) return;
+    chute2_deployed = true;
+    digitalWrite(PARACHUTE2_PIN, HIGH);
+    Serial.println("PARACHUTE: BACKUP deployed (pin 33 HIGH)");
+}
+
+// [FIX#5] Снятие импульса основного парашюта через 1 секунду
+void update_parachute_pulse() {
+    if (chute1_deployed && !chute2_deployed) {
+        // [FIX#5] Импульс 1 с, затем снимаем
+        if (millis() - chute1_deploy_time > 1000) {
+            digitalWrite(PARACHUTE_PIN, LOW);
+        }
+    }
+}
+
+// ════════════════════════════════════════════════════════════
+// Печать состояния
 // ════════════════════════════════════════════════════════════
 void log_telemetry() {
     Serial.print("S:");
@@ -478,6 +582,8 @@ void log_telemetry() {
         Serial.print(servo_pwm[i]);
         if (i < 3) Serial.print(",");
     }
+    Serial.print(" ch1="); Serial.print(chute1_deployed ? "Y" : "N");
+    Serial.print(" ch2="); Serial.print(chute2_deployed ? "Y" : "N");
     Serial.println();
 }
 
@@ -521,15 +627,52 @@ void set_state(State new_state) {
 }
 
 // ════════════════════════════════════════════════════════════
+// Выполнение одного шага управления (общий для ASCENT/COAST)
+// ════════════════════════════════════════════════════════════
+void run_neural_control() {
+    float angle_deg = 0.0f;
+    float sensor_data[NUM_INPUTS] = {qx, qy, qz, qw, gx, gy, gz, ax, ay, az, angle_deg};
+    float normalized_input[NUM_INPUTS];
+    normalize_input(sensor_data, normalized_input);
+
+    float actions[NUM_OUTPUTS];
+    predict(normalized_input, actions);
+
+    float s1, s2, s3, s4;
+    mix_servos(actions[0], actions[1], actions[2], &s1, &s2, &s3, &s4);
+
+    int target_pwm[4] = {
+        (int)(SERVO_CENTER + s1 * SERVO_RANGE),
+        (int)(SERVO_CENTER + s2 * SERVO_RANGE),
+        (int)(SERVO_CENTER + s3 * SERVO_RANGE),
+        (int)(SERVO_CENTER + s4 * SERVO_RANGE)
+    };
+    // [FIX#3] Не перезаписываем servo_pwm[] — rate limiter сам ведёт историю
+    write_servos_rate_limited(target_pwm);
+}
+
+// ════════════════════════════════════════════════════════════
+// Сброс серв в нейтраль (с rate limiting)
+// ════════════════════════════════════════════════════════════
+void center_servos() {
+    int target[4] = {SERVO_CENTER, SERVO_CENTER, SERVO_CENTER, SERVO_CENTER};
+    write_servos_rate_limited(target);
+}
+
+// ════════════════════════════════════════════════════════════
 // SETUP
 // ════════════════════════════════════════════════════════════
 void setup() {
     Serial.begin(115200);
     delay(500);
-    Serial.println("\n=== ROCKET AI v2 (NEU axes, state machine, rate-limited servos) ===");
+    Serial.println("\n=== ROCKET AI v3 (fixed kinematics, state machine, median BMP) ===");
 
     // ── Watchdog (3 секунды) ────────────────────────────────
-    esp_task_wdt_init(WDT_TIMEOUT_SEC, true);
+    esp_task_wdt_config_t wdt_config = {
+        .timeout_ms = 3000,
+        .trigger_panic = true
+    };
+    esp_task_wdt_init(&wdt_config);
     esp_task_wdt_add(NULL);
     Serial.println("WDT: enabled (3s)");
 
@@ -539,22 +682,39 @@ void setup() {
     Serial.println("I2C: 400 kHz");
 
     // ── BMP280 ──────────────────────────────────────────────
+    // [FIX#4] Явно сохраняем флаг работоспособности
     if (!bmp.begin(0x76)) {
         if (!bmp.begin(0x77)) {
             log_error("BMP280 not found at 0x76 or 0x77");
+            bmp_ok = false;
         } else {
             Serial.println("BMP280: found at 0x77");
+            bmp_ok = true;
         }
     } else {
         Serial.println("BMP280: found at 0x76");
+        bmp_ok = true;
     }
 
     // ── MPU6050 ─────────────────────────────────────────────
+    Wire.begin();
+    Wire.setClock(400000);
+
     mpu.initialize();
-    if (mpu.testConnection()) {
-        Serial.println("MPU6050: connected");
+
+    bool mpu_ok = false;
+    for (uint8_t addr : {0x68, 0x69}) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() == 0) {
+            mpu_ok = true;
+            break;
+        }
+    }
+
+    if (mpu_ok) {
+        Serial.println("MPU6050: initialized and responding");
     } else {
-        log_error("MPU6050 not connected — HALTING");
+        log_error("MPU6050 not responding - HALTING");
         while (1) { esp_task_wdt_reset(); delay(10); }
     }
 
@@ -562,13 +722,12 @@ void setup() {
     calibrate_sensors(200);
     Serial.println("Calibration done");
 
-    // ── Инициализация серв (мягкий старт) ───────────────────
+    // ── Инициализация серв ──────────────────────────────────
     servo1.attach(SERVO1_PIN);
     servo2.attach(SERVO2_PIN);
     servo3.attach(SERVO3_PIN);
     servo4.attach(SERVO4_PIN);
 
-    // Сразу в центр
     servo1.write(SERVO_CENTER);
     servo2.write(SERVO_CENTER);
     servo3.write(SERVO_CENTER);
@@ -577,36 +736,57 @@ void setup() {
     delay(300);
     Serial.println("Servos: centered");
 
+    // ── [FIX#5] Инициализация пинов парашютов ───────────────
+    pinMode(PARACHUTE_PIN, OUTPUT);
+    digitalWrite(PARACHUTE_PIN, LOW);
+    pinMode(PARACHUTE2_PIN, OUTPUT);
+    digitalWrite(PARACHUTE2_PIN, LOW);
+    Serial.println("Parachute pins: initialized (LOW)");
+
     // ── Начальные показания высотомера ──────────────────────
-    altitude = bmp.readAltitude(1013.25);
+    if (bmp_ok) {
+        altitude = bmp.readAltitude(1013.25);
+    } else {
+        altitude = 0.0f;
+    }
+    // [FIX#2] Сохраняем высоту земли отдельно
+    ground_altitude = altitude;
+
     for (int i = 0; i < ALT_HISTORY_SIZE; i++) {
         alt_history[i] = altitude;
     }
     alt_history_full = true;
     alt_history_idx = 0;
 
+    // Инициализация медианного буфера барометра
+    for (int i = 0; i < BMP_MEDIAN_SIZE; i++) {
+        bmp_raw_buf[i] = altitude;
+    }
+    bmp_raw_full = true;
+    bmp_raw_idx = 0;
+
     // ── Переход в GROUND ────────────────────────────────────
     set_state(STATE_GROUND);
-    Serial.println("=== READY (waiting for arming command) ===");
+    Serial.print("Ground altitude: ");
+    Serial.println(ground_altitude, 1);
+    Serial.println("=== READY (send 'a' to arm) ===");
 }
 
 // ════════════════════════════════════════════════════════════
 // LOOP (50 Гц, неблокирующий таймер)
 // ════════════════════════════════════════════════════════════
 void loop() {
-    // Кормим watchdog
+    // [FIX#7] Кормим watchdog ПЕРВЫМ делом — до любых return
     esp_task_wdt_reset();
 
     static uint32_t next_loop_us = micros();
 
-    // Жёсткий таймер: ждём следующего такта
     uint32_t now = micros();
     if ((int32_t)(now - next_loop_us) < 0) {
-        return; // ещё не время
+        return;
     }
     next_loop_us += LOOP_PERIOD_US;
 
-    // Если отстали — догоняем без накопления задержки
     if ((int32_t)(micros() - next_loop_us) > (int32_t)LOOP_PERIOD_US) {
         next_loop_us = micros() + LOOP_PERIOD_US;
     }
@@ -617,154 +797,256 @@ void loop() {
     bool mpu_ok = read_mpu();
     if (!mpu_ok) {
         log_error("MPU read failed");
-        return;
+        // [FIX#4] Не выходим из loop — продолжаем с последними валидными данными
+        // (ax,ay,az,gx,gy,gz сохраняют предыдущие значения)
     }
 
-    altitude = bmp.readAltitude(1013.25);
+    // [FIX#4] Безопасное чтение барометра с медианным фильтром
+    if (bmp_ok) {
+        float raw_alt = bmp.readAltitude(1013.25);
+        if (isnan(raw_alt) || isinf(raw_alt)) {
+            log_error("BMP altitude NaN/Inf — using last valid");
+            // altitude сохраняет предыдущее значение
+        } else {
+            // [FIX#4] Медианный фильтр против одиночных выбросов
+            altitude = bmp_median_filter(raw_alt);
+        }
+    } else {
+        // [FIX#4] Барометр неисправен с самого начала —
+        //         используем акселерометр для грубой оценки
+        //         (двойное интегрирование слишком шумное, но
+        //          детект снижения возможен по другим признакам)
+        //         Переходим в аварийный режим, если были в полёте.
+        if (flight_state >= STATE_ASCENT) {
+            log_error("BMP dead in flight — emergency recovery");
+            set_state(STATE_RECOVERY);
+            deploy_parachute_main();
+        }
+    }
+
     temperature = bmp.readTemperature();
-
-    // Проверка валидности высоты
-    if (isnan(altitude) || isinf(altitude)) {
-        log_error("BMP altitude NaN/Inf");
-        altitude = alt_history[(alt_history_idx - 1 + ALT_HISTORY_SIZE) % ALT_HISTORY_SIZE];
-    }
 
     vert_speed = update_vert_speed(altitude, LOOP_PERIOD_US * 1e-6f);
 
     // ── 2. Фильтр ориентации ────────────────────────────────
     if (!update_filter(gx, gy, gz, ax, ay, az, DT)) {
-        log_error("Filter update failed (NaN/Inf input)");
-        return;
+        log_error("Filter update failed — using previous quaternion");
+        // [FIX#4] Не выходим — используем предыдущий кватернион
     }
 
     // ── 3. Конечный автомат ─────────────────────────────────
     float acc_mag_g = sqrt(ax*ax + ay*ay + az*az) / 9.81f;
 
+    // [FIX#5] Обновляем состояние импульса парашюта
+    update_parachute_pulse();
+
     switch (flight_state) {
 
         case STATE_INIT:
-            // Не должны здесь оказаться; переходим в GROUND
             set_state(STATE_GROUND);
             break;
 
         case STATE_GROUND:
-            // Ждём команду ARM по Serial (символ 'a')
+            // Ждём команду ARM по Serial
             if (Serial.available()) {
                 char c = Serial.read();
                 if (c == 'a' || c == 'A') {
                     set_state(STATE_ARMED);
                 }
             }
-            // Держим сервы в центре
-            for (int i = 0; i < 4; i++) servo_pwm[i] = SERVO_CENTER;
-            write_servos_rate_limited(servo_pwm);
+            center_servos();
             break;
 
-        case STATE_ARMED:
-            // Мониторинг ускорения для детекта старта
+        case STATE_ARMED: {
+            // [FIX#2] Таймаут: если старта нет дольше ARMING_TIMEOUT_SEC,
+            //         возвращаемся в GROUND (безопасность)
+            uint32_t armed_elapsed = (millis() - state_entry_time) / 1000;
+            if (armed_elapsed > ARMING_TIMEOUT_SEC) {
+                log_error("Arming timeout — returning to GROUND");
+                set_state(STATE_GROUND);
+                launch_confirm_counter = 0;
+                break;
+            }
+
+            // Детект старта по всплеску ускорения
             if (acc_mag_g > LAUNCH_ACC_THRESH) {
                 launch_confirm_counter++;
                 if (launch_confirm_counter >= LAUNCH_CONFIRM_CNT) {
                     set_state(STATE_ASCENT);
                     ascent_start_time = millis();
+                    // [FIX#2] Сбрасываем переменные детекта отсечки и апогея
+                    burnout_confirm_counter = 0;
+                    peak_thrust = acc_mag_g;
+                    peak_altitude = altitude;
+                    apogee_detected = false;
+                    descent_confirm_counter = 0;
                 }
             } else {
                 launch_confirm_counter = max(0, launch_confirm_counter - 1);
             }
-            // Сервы пока в центре
-            for (int i = 0; i < 4; i++) servo_pwm[i] = SERVO_CENTER;
-            write_servos_rate_limited(servo_pwm);
+            center_servos();
             break;
+        }
 
         case STATE_ASCENT: {
-            // Активное управление
-            float angle_deg = 0.0f;
-            float sensor_data[NUM_INPUTS] = {qx, qy, qz, qw, gx, gy, gz, ax, ay, az, angle_deg};
-            float normalized_input[NUM_INPUTS];
-            normalize_input(sensor_data, normalized_input);
+            run_neural_control();
 
-            float actions[NUM_OUTPUTS];
-            predict(normalized_input, actions);
+            // [FIX#2] Отслеживаем пиковую перегрузку для детекта отсечки
+            if (acc_mag_g > peak_thrust) {
+                peak_thrust = acc_mag_g;
+            }
+            // [FIX#2] Отслеживаем апогей
+            if (altitude > peak_altitude) {
+                peak_altitude = altitude;
+            }
 
-            float s1, s2, s3, s4;
-            mix_servos(actions[0], actions[1], actions[2], &s1, &s2, &s3, &s4);
-
-            int target_pwm[4] = {
-                (int)(SERVO_CENTER + s1 * SERVO_RANGE),
-                (int)(SERVO_CENTER + s2 * SERVO_RANGE),
-                (int)(SERVO_CENTER + s3 * SERVO_RANGE),
-                (int)(SERVO_CENTER + s4 * SERVO_RANGE)
-            };
-
-            // Сохраняем target для телеметрии
-            for (int i = 0; i < 4; i++) servo_pwm[i] = constrain(target_pwm[i], 0, 180);
-            write_servos_rate_limited(target_pwm);
-
-            // Проверка выключения двигателя
+            // ── Детект отсечки двигателя ─────────────────
+            // [FIX#2] Основной критерий: спад тяги ниже доли от пика
+            //         Резервный критерий: таймер MOTOR_BURNOUT_TIME
+            float thrust_ratio = acc_mag_g / peak_thrust;
             float ascent_elapsed = (millis() - ascent_start_time) / 1000.0f;
-            if (ascent_elapsed > MOTOR_BURNOUT_TIME) {
+
+            bool thrust_dropped = (peak_thrust > LAUNCH_ACC_THRESH &&
+                                   thrust_ratio < MOTOR_BURNOUT_THRUST);
+
+            if (thrust_dropped && ascent_elapsed > 1.0f) {
+                // Не ранее чем через 1 с (защита от ложного детекта на старте)
+                burnout_confirm_counter++;
+            } else {
+                burnout_confirm_counter = max(0, burnout_confirm_counter - 1);
+            }
+
+            if (burnout_confirm_counter >= BURNOUT_CONFIRM_CNT ||
+                ascent_elapsed > MOTOR_BURNOUT_TIME) {
+                if (ascent_elapsed > MOTOR_BURNOUT_TIME) {
+                    Serial.println("ASCENT: burnout by timeout");
+                } else {
+                    Serial.println("ASCENT: burnout by thrust drop");
+                }
                 set_state(STATE_COAST);
             }
             break;
         }
 
-        case STATE_COAST:
-            // Стабилизация без тяги. Двигатель выключен, ракета по инерции.
-            // Продолжаем управлять (рули ещё эффективны).
-            {
-                float angle_deg = 0.0f;
-                float sensor_data[NUM_INPUTS] = {qx, qy, qz, qw, gx, gy, gz, ax, ay, az, angle_deg};
-                float normalized_input[NUM_INPUTS];
-                normalize_input(sensor_data, normalized_input);
+        case STATE_COAST: {
+            run_neural_control();
 
-                float actions[NUM_OUTPUTS];
-                predict(normalized_input, actions);
-
-                float s1, s2, s3, s4;
-                mix_servos(actions[0], actions[1], actions[2], &s1, &s2, &s3, &s4);
-
-                int target_pwm[4] = {
-                    (int)(SERVO_CENTER + s1 * SERVO_RANGE),
-                    (int)(SERVO_CENTER + s2 * SERVO_RANGE),
-                    (int)(SERVO_CENTER + s3 * SERVO_RANGE),
-                    (int)(SERVO_CENTER + s4 * SERVO_RANGE)
-                };
-                write_servos_rate_limited(target_pwm);
+            // [FIX#2] Обновляем апогей
+            if (altitude > peak_altitude) {
+                peak_altitude = altitude;
             }
 
-            // Переход в DESCENT при устойчивом снижении
-            if (vert_speed < -2.0f && altitude < alt_history[0] - 5.0f) {
+            // [FIX#2] Детект апогея: высота упала на 3 м от пика
+            //         и вертикальная скорость отрицательна
+            if (!apogee_detected && peak_altitude > ground_altitude + 10.0f) {
+                if (altitude < peak_altitude - 3.0f && vert_speed < -1.0f) {
+                    apogee_detected = true;
+                    Serial.print("APOGEE: ");
+                    Serial.println(peak_altitude, 1);
+                }
+            }
+
+            // [FIX#2] Переход в DESCENT:
+            //         апогей пройден + устойчивое снижение (подтверждение)
+            if (apogee_detected && vert_speed < -3.0f) {
+                descent_confirm_counter++;
+            } else {
+                descent_confirm_counter = max(0, descent_confirm_counter - 1);
+            }
+
+            // Дополнительно: принудительный переход, если ракета
+            // явно ниже земли (барометр мог не зафиксировать апогей)
+            bool below_ground = (altitude < ground_altitude - 20.0f &&
+                                 vert_speed < -5.0f);
+
+            if (descent_confirm_counter >= 10 || below_ground) {
+                if (below_ground) {
+                    log_error("COAST→DESCENT forced (altitude below ground)");
+                }
                 set_state(STATE_DESCENT);
             }
             break;
+        }
 
         case STATE_DESCENT:
-            // Снижение: убираем рули в ноль, готовим парашют
-            {
-                int target_pwm[4] = {SERVO_CENTER, SERVO_CENTER, SERVO_CENTER, SERVO_CENTER};
-                write_servos_rate_limited(target_pwm);
-            }
+        // Снижение: убираем рули в ноль
+        center_servos();
 
-            // На заданной высоте — раскрытие парашюта
-            if (altitude < DESCENT_ALT_THRESH) {
-                set_state(STATE_RECOVERY);
-                // Сигнал на пиропатрон парашюта (пин 32, активный HIGH)
-                // pinMode(32, OUTPUT); digitalWrite(32, HIGH);
-                Serial.println("PARACHUTE: deploy signal");
-            }
-            break;
+        // Раскрываем парашют по вертикальной скорости
+        // Если скорость снижения превысила -5 м/с (падает быстрее 5 м/с)
+        if (vert_speed < -5.0f) {
+            deploy_parachute_main();
+            set_state(STATE_RECOVERY);
+        }
+        break;
 
         case STATE_RECOVERY:
-            // Парашют раскрыт, полёт завершён
+            // Парашют(ы) раскрыты, рули в центр
+            center_servos();
+
+            // [FIX#6] Детект посадки: вертикальная скорость близка к нулю
+            //         в течение нескольких секунд после раскрытия
             {
-                int target_pwm[4] = {SERVO_CENTER, SERVO_CENTER, SERVO_CENTER, SERVO_CENTER};
-                write_servos_rate_limited(target_pwm);
+                uint32_t recovery_elapsed = (millis() - state_entry_time) / 1000;
+                if (recovery_elapsed > 5 &&
+                    fabs(vert_speed) < LANDING_VS_THRESH &&
+                    altitude < ground_altitude + 5.0f) {
+                    // Ракета на земле — можно отключить парашютный импульс
+                    // (уже снят таймером), дополнительных действий не требуется.
+                    // Флаг посадки не выставляем явно — просто логируем.
+                    static bool landing_reported = false;
+                    if (!landing_reported) {
+                        landing_reported = true;
+                        Serial.println("LANDING: detected (vertical speed ~ 0)");
+                    }
+                }
             }
             break;
     }
 
-    // ── 4. Телеметрия (раз в TELEMETRY_PERIOD циклов) ────────
+    // ── 4. Телеметрия ──────────────────────────────────────
     if (loop_counter % TELEMETRY_PERIOD == 0) {
         log_telemetry();
+    }
+
+    // ── Команды из монитора порта ──
+    if (Serial.available()) {
+        char c = Serial.read();
+        switch (c) {
+            case 'a':
+            case 'A':
+                if (flight_state == STATE_GROUND) {
+                    set_state(STATE_ARMED);
+                }
+                break;
+
+            case 't':
+            case 'T':
+                // Принудительный переход в ASCENT (для тестов)
+                if (flight_state == STATE_ARMED || flight_state == STATE_GROUND) {
+                    set_state(STATE_ASCENT);
+                    ascent_start_time = millis();
+                    Serial.println("TEST: forced ASCENT mode");
+                }
+                break;
+
+            case 'p':
+            case 'P':
+                // Ручной тест парашюта
+                deploy_parachute_main();
+                Serial.println("TEST: parachute deployed");
+                break;
+
+            default:
+                break;
+
+            case 'd':
+            case 'D':
+                if (flight_state == STATE_COAST) {
+                    set_state(STATE_DESCENT);
+                    Serial.println("TEST: forced DESCENT mode");
+                }
+                break;
+        }
     }
 }

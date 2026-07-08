@@ -797,4 +797,4 @@ def generate_dataset(total_episodes: int = 30000, num_workers: int = 20):
 
 
 if __name__ == "__main__":
-    generate_dataset(total_episodes=10000, num_workers=20)
+    generate_dataset(total_episodes=15000, num_workers=24)
