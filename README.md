@@ -137,7 +137,7 @@ S:RECOVERY alt=299.5 vs=-1.12 acc=0.99G srv=90,90,90,90 ch1=Y ch2=N
 
 ## 📄 License
 
-MIT — do whatever you want, but if the rocket crashes, it's on you. 😄
+MIT — do whatever you want, but if the rocket crashes, it's on you. 
 
 ---
 
