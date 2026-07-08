@@ -149,3 +149,5 @@ MIT — do whatever you want, but if the rocket crashes, it's on you. 😄
 ---
 
 **🚀 To the stars!**
+
+# **THIS IS A ROCKET MODEL; THE DEVELOPER IS NOT RESPONSIBLE FOR YOUR ACTIONS.**
