@@ -1,0 +1,1153 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NOVA — AI-Powered Rocket Control System</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>">
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-card: #1a1a2e;
+            --text-primary: #f0f0f5;
+            --text-secondary: #8888aa;
+            --accent-blue: #0066ff;
+            --accent-red: #ff3333;
+            --accent-cyan: #00d4ff;
+            --accent-green: #00ff88;
+            --accent-orange: #ff8800;
+            --border-color: #2a2a4a;
+            --font-mono: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: var(--font-sans);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            overflow-x: hidden;
+            line-height: 1.6;
+        }
+        #particle-canvas {
+            position: fixed;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 0;
+            pointer-events: none;
+        }
+        .scroll-indicator {
+            position: absolute;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            font-family: var(--font-mono);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            animation: fadeInUp 1s 1.5s both;
+        }
+        .scroll-indicator .mouse {
+            width: 26px; height: 40px;
+            border: 2px solid var(--text-secondary);
+            border-radius: 13px;
+            position: relative;
+        }
+        .scroll-indicator .mouse::after {
+            content: '';
+            position: absolute;
+            top: 6px; left: 50%;
+            transform: translateX(-50%);
+            width: 3px; height: 10px;
+            background: var(--accent-cyan);
+            border-radius: 2px;
+            animation: scrollWheel 2s infinite;
+        }
+        @keyframes scrollWheel {
+            0% { opacity: 1; transform: translateX(-50%) translateY(0); }
+            100% { opacity: 0; transform: translateX(-50%) translateY(16px); }
+        }
+        .content { position: relative; z-index: 1; }
+        section {
+            position: relative;
+            padding: 100px 24px;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        section:first-of-type { padding-top: 0; }
+
+        .hero {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            position: relative;
+            padding: 120px 24px 100px;
+        }
+        .hero .badge {
+            display: inline-block;
+            padding: 6px 16px;
+            border: 1px solid var(--accent-cyan);
+            border-radius: 20px;
+            color: var(--accent-cyan);
+            font-family: var(--font-mono);
+            font-size: 12px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-bottom: 24px;
+            animation: fadeInUp 1s 0.3s both;
+            backdrop-filter: blur(4px);
+            background: rgba(0, 212, 255, 0.05);
+        }
+        .hero h1 {
+            font-size: clamp(48px, 10vw, 120px);
+            font-weight: 900;
+            letter-spacing: -2px;
+            line-height: 1.15;
+            padding-bottom: 8px;
+            background: linear-gradient(135deg, #ffffff 0%, #0066ff 50%, #00d4ff 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: fadeInUp 1s 0.5s both;
+        }
+        .hero .subtitle {
+            font-size: clamp(16px, 2.5vw, 24px);
+            color: var(--text-secondary);
+            margin-top: 20px;
+            max-width: 700px;
+            font-weight: 300;
+            animation: fadeInUp 1s 0.7s both;
+        }
+        .hero .subtitle span { color: var(--accent-cyan); }
+        .hero .tech-stack {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            justify-content: center;
+            margin-top: 40px;
+            animation: fadeInUp 1s 0.9s both;
+        }
+        .hero .tech-stack span {
+            padding: 8px 20px;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--text-secondary);
+            background: rgba(255,255,255,0.02);
+        }
+        .hero .tech-stack span.highlight {
+            border-color: var(--accent-cyan);
+            color: var(--accent-cyan);
+            background: rgba(0, 212, 255, 0.05);
+        }
+        .hero-cta {
+            display: flex;
+            gap: 16px;
+            margin-top: 48px;
+            animation: fadeInUp 1s 1.1s both;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 14px 32px;
+            border-radius: 6px;
+            font-family: var(--font-sans);
+            font-size: 14px;
+            font-weight: 600;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: none;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+            color: #fff;
+            box-shadow: 0 4px 20px rgba(0, 102, 255, 0.3);
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px rgba(0, 102, 255, 0.5);
+        }
+        .btn-secondary {
+            background: transparent;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+        }
+        .btn-secondary:hover {
+            border-color: var(--text-primary);
+            transform: translateY(-2px);
+        }
+
+        .section-header {
+            text-align: center;
+            margin-bottom: 64px;
+        }
+        .section-header .label {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            color: var(--accent-cyan);
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-bottom: 12px;
+        }
+        .section-header h2 {
+            font-size: clamp(32px, 4vw, 48px);
+            font-weight: 700;
+            letter-spacing: -1px;
+        }
+        .section-header p {
+            color: var(--text-secondary);
+            max-width: 600px;
+            margin: 16px auto 0;
+            font-size: 16px;
+        }
+
+        .rocket-visual-container {
+            position: relative;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            margin: 60px 0;
+            animation: fadeInUp 1s 0.5s both;
+        }
+        .rocket-svg {
+            width: 120px;
+            height: auto;
+            filter: drop-shadow(0 0 40px rgba(0, 212, 255, 0.2));
+            animation: rocketFloat 4s ease-in-out infinite;
+        }
+        @keyframes rocketFloat {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-20px); }
+        }
+        .rocket-svg .flame {
+            animation: flameFlicker 0.15s infinite alternate;
+            transform-origin: top center;
+        }
+        @keyframes flameFlicker {
+            0% { d: path("M42,95 C38,110 35,120 45,130 C47,132 50,130 50,130 C50,130 53,132 55,130 C65,120 62,110 58,95"); }
+            100% { d: path("M42,95 C36,112 33,125 45,135 C47,138 50,135 50,135 C50,135 53,138 55,135 C67,125 64,112 58,95"); }
+        }
+
+        .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; }
+        .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(480px, 1fr)); gap: 24px; }
+
+        .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 32px;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 3px;
+            background: linear-gradient(90deg, transparent, var(--accent-cyan), transparent);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        .card:hover { border-color: var(--accent-cyan); transform: translateY(-4px); box-shadow: 0 12px 40px rgba(0, 212, 255, 0.08); }
+        .card:hover::before { opacity: 1; }
+        .card .icon { font-size: 32px; margin-bottom: 16px; }
+        .card h3 { font-size: 18px; margin-bottom: 12px; color: var(--text-primary); }
+        .card p, .card li { color: var(--text-secondary); font-size: 14px; line-height: 1.7; }
+        .card ul { list-style: none; padding: 0; }
+        .card ul li { padding: 4px 0; padding-left: 16px; position: relative; }
+        .card ul li::before { content: '→'; position: absolute; left: 0; color: var(--accent-cyan); }
+
+        .state-machine {
+            padding: 40px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            margin-top: 40px;
+        }
+        .states-grid { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; }
+        .state-node {
+            padding: 12px 24px; border-radius: 8px; font-family: var(--font-mono);
+            font-size: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase;
+            background: rgba(255,255,255,0.03); border: 1px solid var(--border-color); color: var(--text-secondary);
+        }
+        .state-node.active { border-color: var(--accent-cyan); color: var(--accent-cyan); background: rgba(0, 212, 255, 0.05); box-shadow: 0 0 20px rgba(0, 212, 255, 0.1); }
+        .state-node.start { border-color: var(--accent-green); color: var(--accent-green); }
+        .state-node.danger { border-color: var(--accent-red); color: var(--accent-red); }
+        .state-arrow { color: var(--border-color); font-size: 16px; display: flex; align-items: center; }
+
+        .nn-visual { display: flex; align-items: center; justify-content: center; gap: 20px; padding: 40px 0; flex-wrap: wrap; }
+        .nn-layer { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+        .nn-layer .layer-label { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); margin-top: 8px; }
+        .nn-neuron { width: 12px; height: 12px; border-radius: 50%; background: var(--accent-cyan); opacity: 0.3; }
+        .nn-neuron.active { opacity: 1; box-shadow: 0 0 12px rgba(0, 212, 255, 0.5); animation: neuronPulse 2s infinite; }
+        @keyframes neuronPulse { 0%, 100% { box-shadow: 0 0 12px rgba(0, 212, 255, 0.3); } 50% { box-shadow: 0 0 24px rgba(0, 212, 255, 0.7); } }
+        .nn-connector { width: 40px; height: 2px; background: linear-gradient(90deg, var(--accent-cyan), transparent); opacity: 0.2; }
+
+        .specs-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        .specs-table tr { border-bottom: 1px solid var(--border-color); }
+        .specs-table td { padding: 12px 16px; color: var(--text-secondary); }
+        .specs-table td:first-child { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); width: 40%; font-weight: 500; }
+        .specs-table td:last-child { text-align: right; }
+        .specs-table tr:hover td { color: var(--text-primary); }
+
+        .sensor-card {
+            background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px;
+            padding: 24px; display: flex; align-items: flex-start; gap: 16px; transition: all 0.3s ease;
+        }
+        .sensor-card:hover { border-color: var(--accent-cyan); transform: translateY(-2px); }
+        .sensor-card .sensor-icon {
+            width: 48px; height: 48px; border-radius: 8px; background: rgba(0, 212, 255, 0.05);
+            border: 1px solid var(--border-color); display: flex; align-items: center;
+            justify-content: center; font-size: 24px; flex-shrink: 0;
+        }
+        .sensor-card .sensor-info h4 { font-size: 14px; margin-bottom: 4px; }
+        .sensor-card .sensor-info p { font-size: 13px; color: var(--text-secondary); }
+        .sensor-card .sensor-info .spec { font-family: var(--font-mono); font-size: 12px; color: var(--accent-cyan); margin-top: 4px; }
+
+        .sim-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 16px; margin: 32px 0; }
+        .sim-stat { text-align: center; padding: 24px; background: var(--bg-card); border: 1px solid var(--border-color); border-radius: 8px; }
+        .sim-stat .number {
+            font-size: 36px; font-weight: 700; font-family: var(--font-mono);
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+        }
+        .sim-stat .label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; font-family: var(--font-mono); }
+
+        .imperfections { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 20px; }
+        .imperfection-item { padding: 12px 16px; background: rgba(255, 51, 51, 0.03); border: 1px solid rgba(255, 51, 51, 0.1); border-radius: 6px; font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 10px; }
+        .imperfection-item .badge-imp { font-family: var(--font-mono); font-size: 11px; color: var(--accent-red); background: rgba(255, 51, 51, 0.1); padding: 2px 8px; border-radius: 4px; flex-shrink: 0; }
+
+        .code-block { background: #0d0d1a; border: 1px solid var(--border-color); border-radius: 8px; padding: 24px; font-family: var(--font-mono); font-size: 13px; line-height: 1.8; overflow-x: auto; color: var(--text-secondary); }
+        .code-block .comment { color: #4a4a6a; }
+        .code-block .keyword { color: var(--accent-cyan); }
+        .code-block .string { color: var(--accent-green); }
+        .code-block .number { color: var(--accent-orange); }
+        .code-block .type { color: var(--accent-blue); }
+
+        footer {
+            position: relative; z-index: 1; text-align: center;
+            padding: 40px 24px; border-top: 1px solid var(--border-color);
+            color: var(--text-secondary); font-size: 12px; font-family: var(--font-mono);
+        }
+        footer .links { display: flex; gap: 24px; justify-content: center; margin-bottom: 20px; flex-wrap: wrap; }
+        footer .links a { color: var(--text-secondary); text-decoration: none; transition: color 0.3s; }
+        footer .links a:hover { color: var(--accent-cyan); }
+
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+        .fade-in { opacity: 0; transform: translateY(30px); transition: all 0.6s cubic-bezier(0.215, 0.61, 0.355, 1); }
+        .fade-in.visible { opacity: 1; transform: translateY(0); }
+
+        @media (min-width: 1400px) {
+            section { padding: 120px 32px; max-width: 1400px; }
+            .grid-3 { grid-template-columns: repeat(3, 1fr); }
+            .hero h1 { font-size: 120px; }
+            .hero .subtitle { font-size: 24px; max-width: 800px; }
+            .sim-stats { grid-template-columns: repeat(5, 1fr); }
+        }
+        @media (max-width: 1024px) {
+            .grid-2 { grid-template-columns: 1fr; }
+            .grid-3 { grid-template-columns: repeat(2, 1fr); }
+            .hero h1 { font-size: clamp(48px, 8vw, 80px); }
+            .sim-stats { grid-template-columns: repeat(3, 1fr); }
+            .sensor-card { padding: 20px; }
+            .state-machine { padding: 24px; }
+        }
+        @media (max-width: 768px) {
+            section { padding: 48px 16px; }
+            .grid-2, .grid-3 { grid-template-columns: 1fr; }
+            .hero { padding: 100px 16px 80px; min-height: auto; }
+            .hero h1 { font-size: 42px; letter-spacing: -1px; }
+            .hero .subtitle { font-size: 16px; margin-top: 16px; }
+            .hero .tech-stack { gap: 8px; margin-top: 24px; }
+            .hero .tech-stack span { padding: 6px 14px; font-size: 11px; }
+            .hero-cta { flex-direction: column; align-items: stretch; gap: 12px; margin-top: 32px; }
+            .hero-cta .btn { justify-content: center; padding: 12px 24px; }
+            .btn { font-size: 13px; padding: 12px 24px; }
+            .states-grid { gap: 6px; }
+            .state-node { font-size: 10px; padding: 6px 10px; min-width: 56px; text-align: center; }
+            .state-arrow { font-size: 12px; }
+            .nn-visual { gap: 12px; padding: 20px 0; }
+            .nn-connector { width: 20px; }
+            .specs-table td { font-size: 12px; padding: 8px 10px; }
+            .specs-table td:first-child { width: auto; }
+            .sim-stats { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+            .sim-stat { padding: 16px; }
+            .sim-stat .number { font-size: 28px; }
+            .card { padding: 24px; }
+            .card h3 { font-size: 16px; }
+            .sensor-card { padding: 16px; flex-direction: column; align-items: flex-start; }
+            .sensor-card .sensor-icon { width: 40px; height: 40px; font-size: 20px; }
+            .code-block { padding: 16px; font-size: 11px; }
+            .imperfections { grid-template-columns: 1fr 1fr; }
+            .imperfection-item { font-size: 12px; padding: 8px 12px; }
+            footer { padding: 32px 16px; }
+            footer .links { flex-wrap: wrap; gap: 12px; font-size: 11px; }
+            .glow-line { margin: 40px 0; }
+            .rocket-visual-container { margin: 32px 0; }
+            .rocket-svg { width: 90px; }
+            .section-header { margin-bottom: 40px; }
+            .section-header h2 { font-size: clamp(24px, 5vw, 32px); }
+            .section-header .label { font-size: 10px; }
+            .scroll-indicator .mouse { width: 22px; height: 34px; }
+        }
+        @media (max-width: 480px) {
+            .hero { padding: 80px 12px 60px; }
+            .hero .badge { font-size: 10px; padding: 4px 12px; margin-bottom: 16px; }
+            .hero h1 { font-size: 32px; }
+            .hero .subtitle { font-size: 14px; }
+            .hero .tech-stack { margin-top: 20px; }
+            .hero .tech-stack span { padding: 4px 10px; font-size: 10px; }
+            .hero-cta { margin-top: 24px; }
+            section { padding: 36px 12px; }
+            .card { padding: 16px; }
+            .card .icon { font-size: 24px; margin-bottom: 12px; }
+            .card p, .card li { font-size: 13px; }
+            .sim-stats { grid-template-columns: 1fr 1fr; gap: 8px; }
+            .sim-stat { padding: 12px; }
+            .sim-stat .number { font-size: 24px; }
+            .sim-stat .label { font-size: 10px; }
+            .imperfections { grid-template-columns: 1fr; }
+            .state-node { font-size: 9px; padding: 4px 8px; min-width: 48px; }
+            .states-grid { gap: 4px; }
+            .state-arrow { font-size: 10px; }
+            .specs-table td { font-size: 11px; padding: 6px 8px; }
+            .code-block { padding: 12px; font-size: 10px; }
+            .rocket-svg { width: 72px; }
+            footer .links { flex-direction: column; gap: 6px; }
+            .nn-neuron { width: 8px; height: 8px; }
+            .nn-neuron.active { width: 8px; height: 8px; }
+            .nn-layer .layer-label { font-size: 9px; }
+            .nn-connector { width: 12px; }
+            .glow-line { margin: 24px 0; }
+        }
+        @media (max-width: 360px) {
+            .hero h1 { font-size: 26px; }
+            .hero .subtitle { font-size: 13px; }
+            .hero .tech-stack span { font-size: 9px; padding: 3px 8px; }
+            .hero-cta .btn { font-size: 12px; padding: 10px 16px; }
+            .sim-stats { grid-template-columns: 1fr; }
+            .specs-table td { font-size: 10px; padding: 4px 6px; }
+            .state-node { font-size: 8px; padding: 3px 6px; min-width: 40px; }
+        }
+        @media (max-height: 600px) and (orientation: landscape) {
+            .hero { padding: 60px 24px 40px; min-height: auto; }
+            .hero h1 { font-size: 36px; }
+            .hero .subtitle { font-size: 13px; }
+            .hero .tech-stack { margin-top: 12px; }
+            .rocket-visual-container { margin: 16px 0; }
+            .rocket-svg { width: 60px; }
+            .scroll-indicator { display: none; }
+        }
+        @media print {
+            #particle-canvas, .scroll-indicator, .progress-bar { display: none; }
+            body { background: #fff; color: #000; }
+            .hero { min-height: auto; }
+        }
+
+        .progress-bar {
+            position: fixed; top: 0; left: 0; height: 2px;
+            background: linear-gradient(90deg, var(--accent-blue), var(--accent-cyan));
+            z-index: 100; width: 0%; transition: width 0.1s linear;
+        }
+        .glow-line { width: 100%; height: 1px; background: linear-gradient(90deg, transparent, var(--accent-cyan), transparent); opacity: 0.3; margin: 80px 0; }
+        .fix-badge { display: inline-block; font-family: var(--font-mono); font-size: 11px; color: var(--accent-green); background: rgba(0, 255, 136, 0.05); border: 1px solid rgba(0, 255, 136, 0.15); padding: 2px 10px; border-radius: 4px; margin-right: 6px; }
+
+        /* Collaboration Logos */
+        .collab-section {
+            text-align: center;
+            padding: 80px 24px;
+            max-width: 1200px;
+            margin: 0 auto;
+            position: relative;
+            z-index: 1;
+        }
+        .collab-logos {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 48px;
+            flex-wrap: wrap;
+            margin: 40px 0 24px;
+        }
+        .collab-logo {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            transition: all 0.3s ease;
+            padding: 24px 32px;
+            border-radius: 12px;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+        }
+        .collab-logo:hover {
+            border-color: var(--accent-cyan);
+            transform: translateY(-4px);
+            box-shadow: 0 12px 40px rgba(0, 212, 255, 0.08);
+        }
+        .collab-logo img,
+        .collab-logo svg {
+            height: 60px;
+            width: auto;
+            filter: brightness(0.9);
+        }
+        .collab-logo .logo-label {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-secondary);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+        }
+        .collab-divider {
+            font-size: 32px;
+            color: var(--accent-cyan);
+            opacity: 0.5;
+            font-weight: 100;
+            user-select: none;
+        }
+        .collab-tagline {
+            font-family: var(--font-mono);
+            font-size: 13px;
+            color: var(--text-secondary);
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-top: 8px;
+        }
+        .collab-tagline span {
+            color: var(--accent-cyan);
+        }
+        @media (max-width: 768px) {
+            .collab-logos { gap: 24px; }
+            .collab-logo { padding: 16px 24px; }
+            .collab-logo img, .collab-logo svg { height: 44px; }
+            .collab-divider { font-size: 24px; }
+            .collab-section { padding: 48px 16px; }
+        }
+        @media (max-width: 480px) {
+            .collab-logos { gap: 16px; flex-direction: column; }
+            .collab-divider { transform: rotate(90deg); }
+        }
+    </style>
+</head>
+<body>
+
+<div class="progress-bar" id="progressBar"></div>
+<canvas id="particle-canvas"></canvas>
+
+<div class="content">
+
+    <!-- HERO -->
+    <section class="hero">
+        <div class="badge">Next-Gen Flight Control · by liquefield</div>
+        <h1>PROJECT NOVA</h1>
+        <p class="subtitle">
+            <span>AI-управляемая</span> ракета с нейросетевым контроллером, 
+            работающим на бортовом ESP32 в реальном времени
+        </p>
+
+        <div class="tech-stack">
+            <span class="highlight">ESP32</span>
+            <span class="highlight">TensorFlow → C++</span>
+            <span class="highlight">MPU6050</span>
+            <span>BMP280</span>
+            <span>6-DOF Sim</span>
+            <span>RK4</span>
+            <span>X‑Config Servos</span>
+        </div>
+
+        <div class="rocket-visual-container">
+            <svg class="rocket-svg" viewBox="0 0 100 160" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <linearGradient id="rocketBody" x1="0" y1="0" x2="1" y2="0">
+                        <stop offset="0%" stop-color="#2a2a4a"/>
+                        <stop offset="50%" stop-color="#f0f0f5"/>
+                        <stop offset="100%" stop-color="#2a2a4a"/>
+                    </linearGradient>
+                    <radialGradient id="flameGrad" cx="50%" cy="0%" r="100%">
+                        <stop offset="0%" stop-color="#ffffff"/>
+                        <stop offset="30%" stop-color="#ffdd00"/>
+                        <stop offset="60%" stop-color="#ff6600"/>
+                        <stop offset="100%" stop-color="#ff330066"/>
+                    </radialGradient>
+                </defs>
+                <path d="M50,5 C35,5 25,20 25,30 L25,40 L75,40 L75,30 C75,20 65,5 50,5Z" fill="url(#rocketBody)" stroke="#4a4a6a" stroke-width="0.5"/>
+                <rect x="25" y="40" width="50" height="55" rx="2" fill="url(#rocketBody)" stroke="#4a4a6a" stroke-width="0.5"/>
+                <circle cx="50" cy="55" r="8" fill="none" stroke="var(--accent-cyan)" stroke-width="1.5" opacity="0.6"/>
+                <circle cx="50" cy="55" r="5" fill="var(--accent-cyan)" opacity="0.15"/>
+                <text x="50" y="76" text-anchor="middle" fill="var(--accent-cyan)" font-size="6" font-weight="700" font-family="monospace" opacity="0.5">NOVA</text>
+                <text x="50" y="84" text-anchor="middle" fill="var(--text-secondary)" font-size="4" font-family="monospace" opacity="0.35">by liquefield</text>
+                <path d="M25,90 L15,105 L25,100Z" fill="#2a2a4a" stroke="#4a4a6a" stroke-width="0.5"/>
+                <path d="M75,90 L85,105 L75,100Z" fill="#2a2a4a" stroke="#4a4a6a" stroke-width="0.5"/>
+                <path d="M38,95 L35,105 L65,105 L62,95Z" fill="#1a1a2e" stroke="#4a4a6a" stroke-width="0.5"/>
+                <g class="flame">
+                    <path d="M42,95 C38,110 35,120 45,130 C47,132 50,130 50,130 C50,130 53,132 55,130 C65,120 62,110 58,95" fill="url(#flameGrad)" opacity="0.9"/>
+                </g>
+                <rect x="24" y="42" width="52" height="2" rx="1" fill="var(--accent-cyan)" opacity="0.15"/>
+                <rect x="24" y="88" width="52" height="2" rx="1" fill="var(--accent-cyan)" opacity="0.15"/>
+            </svg>
+        </div>
+
+        <div class="hero-cta">
+            <a href="#overview" class="btn btn-primary">Подробнее о проекте →</a>
+            <a href="#specs" class="btn btn-secondary">Технические характеристики</a>
+            <a href="https://t.me/liquefield" target="_blank" class="btn btn-secondary" style="border-color:var(--accent-cyan);color:var(--accent-cyan);">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M11.944 0A12 12 0 000 12a12 12 0 0012 12 12 12 0 0012-12A12 12 0 0012 0a12 12 0 00-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 01.171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z"/></svg>
+                Telegram
+            </a>
+            <a href="https://github.com/liquefield-maxouiy/rocket-ai-controller" target="_blank" class="btn btn-secondary" style="border-color:var(--accent-cyan);color:var(--accent-cyan);">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+                GitHub
+            </a>
+        </div>
+
+        <div class="scroll-indicator">
+            <div class="mouse"></div>
+            <span>Scroll</span>
+        </div>
+    </section>
+
+    <div class="glow-line"></div>
+
+    <!-- COLLABORATION: SPACEX × LIQUEFIELD × EESA (наверху) -->
+    <div class="collab-section fade-in">
+        <div class="section-header" style="margin-bottom:32px;">
+            <div class="label">Collaboration</div>
+            <h2 style="font-size:clamp(24px,3vw,36px);">Наши партнёры</h2>
+            <p style="max-width:500px;margin:12px auto 0;">AI-управление полётом, созданное с точностью и страстью</p>
+        </div>
+
+        <div class="collab-logos">
+            <!-- SpaceX -->
+            <div class="collab-logo">
+                <img src="spacex.png" alt="SpaceX" style="height:60px;width:auto;object-fit:contain;">
+                <span class="logo-label">SpaceX</span>
+            </div>
+
+            <span class="collab-divider">✕</span>
+
+            <!-- NOVA / liquefield -->
+            <div class="collab-logo">
+                <img src="logo-NOVA.png" alt="NOVA Logo" style="height:60px;width:auto;object-fit:contain;">
+                <span class="logo-label">liquefield × NOVA</span>
+            </div>
+
+            <span class="collab-divider">✕</span>
+
+            <!-- EESA -->
+            <div class="collab-logo">
+                <img src="eesa.png" alt="EESA" style="height:60px;width:auto;object-fit:contain;">
+                <span class="logo-label">EESA</span>
+            </div>
+        </div>
+
+        <div class="collab-tagline">
+            <span>✦</span> Вместе к звёздам <span>✦</span>
+        </div>
+    </div>
+
+    <div class="glow-line"></div>
+
+    <!-- OVERVIEW -->
+    <section id="overview">
+        <div class="section-header fade-in">
+            <div class="label">Overview</div>
+            <h2>Что такое NOVA?</h2>
+            <p>
+                NOVA — это полностью автономная система управления ракетой на базе 
+                нейросети, обученной методом подражания (behavioral cloning). 
+                Система работает на микроконтроллере ESP32 и управляет 4 рулями 
+                в X-конфигурации для активной стабилизации.
+            </p>
+        </div>
+        <div class="grid-3">
+            <div class="card fade-in">
+                <div class="icon">🧠</div>
+                <h3>Нейросетевой контроллер</h3>
+                <p>Глубокая нейросеть архитектуры 11 → 200 → 150 → 80 → 3 с LayerNorm и ReLU/Tanh активациями. Обучена на 30,000+ симулированных полётах с PD-политикой и exploration.</p>
+            </div>
+            <div class="card fade-in">
+                <div class="icon">🎯</div>
+                <h3>6-DOF Симулятор</h3>
+                <p>Физически точный симулятор с RK4-интегрированием, реалистичной аэродинамикой, переменной массой/инерцией и 10 видами неидеальностей для робастности.</p>
+            </div>
+            <div class="card fade-in">
+                <div class="icon">⚡</div>
+                <h3>Real-time на ESP32</h3>
+                <p>Работает на ESP32 с частотой 50 Гц. Общий цикл: чтение MPU6050 + BMP280 → фильтр Маджвика → нейросеть → сервы. Расход RAM ~320 КБ.</p>
+            </div>
+        </div>
+    </section>
+
+    <div class="glow-line"></div>
+
+    <!-- FSM -->
+    <section id="fsm">
+        <div class="section-header fade-in">
+            <div class="label">State Machine</div>
+            <h2>Конечный автомат полёта</h2>
+            <p>Семь состояний с защищёнными переходами, детектом апогея, отсечки двигателя и посадки</p>
+        </div>
+        <div class="state-machine fade-in">
+            <div class="states-grid">
+                <span class="state-node start">INIT</span>
+                <span class="state-arrow">→</span>
+                <span class="state-node">GROUND</span>
+                <span class="state-arrow">→</span>
+                <span class="state-node">ARMED</span>
+                <span class="state-arrow">→</span>
+                <span class="state-node active">ASCENT</span>
+                <span class="state-arrow">→</span>
+                <span class="state-node">COAST</span>
+                <span class="state-arrow">→</span>
+                <span class="state-node">DESCENT</span>
+                <span class="state-arrow">→</span>
+                <span class="state-node danger">RECOVERY</span>
+            </div>
+            <div style="display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:24px;font-size:12px;color:var(--text-secondary)">
+                <span>🔹 Таймаут ARMED 120 с → GROUND</span>
+                <span>🔹 Детект отсечки по спаду тяги</span>
+                <span>🔹 Апогей: —3м от пика + vs < −1 м/с</span>
+                <span>🔹 Парашют при vs < −5 м/с</span>
+                <span>🔹 Детект посадки: vs ≈ 0</span>
+            </div>
+        </div>
+    </section>
+
+    <div class="glow-line"></div>
+
+    <!-- NEURAL NETWORK -->
+    <section id="nn">
+        <div class="section-header fade-in">
+            <div class="label">Neural Network</div>
+            <h2>Архитектура нейросети</h2>
+            <p>Обучена с подкреплением через behavioral cloning на данных симуляции</p>
+        </div>
+        <div class="card fade-in" style="text-align:center;">
+            <div class="nn-visual">
+                <div class="nn-layer">
+                    <div class="nn-layer" style="gap:4px;">
+                        <div class="nn-neuron active"></div>
+                        <div class="nn-neuron active"></div>
+                        <div class="nn-neuron active"></div>
+                        <div class="nn-neuron active"></div>
+                        <div class="nn-neuron" style="opacity:0.5"></div>
+                        <div class="nn-neuron" style="opacity:0.5"></div>
+                    </div>
+                    <div class="layer-label">Input: 11</div>
+                </div>
+                <div class="nn-connector"></div>
+                <div class="nn-layer">
+                    <div class="nn-layer" style="gap:3px;">
+                        <div class="nn-neuron active" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron active" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                    </div>
+                    <div class="layer-label">Dense 200</div>
+                </div>
+                <div class="nn-connector"></div>
+                <div class="nn-layer">
+                    <div class="nn-layer" style="gap:3px;">
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                    </div>
+                    <div class="layer-label">Dense 150</div>
+                </div>
+                <div class="nn-connector"></div>
+                <div class="nn-layer">
+                    <div class="nn-layer" style="gap:3px;">
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                        <div class="nn-neuron" style="width:8px;height:8px;"></div>
+                    </div>
+                    <div class="layer-label">Dense 80</div>
+                </div>
+                <div class="nn-connector"></div>
+                <div class="nn-layer">
+                    <div class="nn-layer" style="gap:4px;">
+                        <div class="nn-neuron active" style="background:var(--accent-green);"></div>
+                        <div class="nn-neuron active" style="background:var(--accent-orange);"></div>
+                        <div class="nn-neuron active" style="background:var(--accent-red);"></div>
+                    </div>
+                    <div class="layer-label">Output: 3</div>
+                </div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:24px;text-align:left;">
+                <div><span class="fix-badge">Inputs</span> <span style="color:var(--text-secondary);font-size:12px;">qx, qy, qz, qw · gx, gy, gz · ax, ay, az · angle_deg</span></div>
+                <div><span class="fix-badge">Outputs</span> <span style="color:var(--text-secondary);font-size:12px;">Pitch · Yaw · Roll (нормализованы, −1…+1)</span></div>
+                <div><span class="fix-badge">Training</span> <span style="color:var(--text-secondary);font-size:12px;">30,000 эпизодов · MSE loss · LayerNorm + ReLU</span></div>
+            </div>
+        </div>
+    </section>
+
+    <div class="glow-line"></div>
+
+    <!-- SPECS -->
+    <section id="specs">
+        <div class="section-header fade-in">
+            <div class="label">Specifications</div>
+            <h2>Технические характеристики</h2>
+            <p>Детальная спецификация аппаратной и программной части</p>
+        </div>
+        <div class="grid-2">
+            <div class="card fade-in">
+                <h3>📦 Аппаратная платформа</h3>
+                <table class="specs-table">
+                    <tr><td>Микроконтроллер</td><td>ESP32 @ 240 МГц</td></tr>
+                    <tr><td>IMU</td><td>MPU6050 (6-axis, I²C)</td></tr>
+                    <tr><td>Барометр</td><td>BMP280 (±1 м, I²C)</td></tr>
+                    <tr><td>Сервоприводы</td><td>4× MG995 (X-config)</td></tr>
+                    <tr><td>Парашют</td><td>2× пиропатрон (осн. + резерв)</td></tr>
+                    <tr><td>Логирование</td><td>SD-карта (CSV @ 50 Гц)</td></tr>
+                    <tr><td>Watchdog</td><td>Аппаратный, 3 сек</td></tr>
+                </table>
+            </div>
+            <div class="card fade-in">
+                <h3>🧮 Программное обеспечение</h3>
+                <table class="specs-table">
+                    <tr><td>Язык контроллера</td><td>C++ (Arduino framework)</td></tr>
+                    <tr><td>Симулятор</td><td>Python + NumPy + SciPy</td></tr>
+                    <tr><td>Тренировка</td><td>Python + TensorFlow 2.x</td></tr>
+                    <tr><td>Частота управления</td><td>50 Гц (LOOP_PERIOD = 20 мс)</td></tr>
+                    <tr><td>Фильтр ориентации</td><td>Маджвика (α = 0.95)</td></tr>
+                    <tr><td>Ограничение серв</td><td>4 PWM-ед/тик (~111 °/с)</td></tr>
+                    <tr><td>Вертикальная скорость</td><td>Скользящее окно 25 отсчётов</td></tr>
+                </table>
+            </div>
+        </div>
+        <div class="card fade-in" style="margin-top:24px;">
+            <h3>🎯 Параметры детекции</h3>
+            <table class="specs-table">
+                <tr><td>Запуск</td><td>acc > 2.5 G × 5 отсчётов</td></tr>
+                <tr><td>Отсечка двигателя</td><td>Тяга < 15% пика × 10 отсчётов (или 8 с таймаут)</td></tr>
+                <tr><td>Апогей</td><td>—3 м от пика + vs < −1 м/с</td></tr>
+                <tr><td>Раскрытие парашюта</td><td>vs < −5 м/с</td></tr>
+                <tr><td>Посадка</td><td>|vs| < 0.5 м/с + alt < ground + 5 м</td></tr>
+            </table>
+        </div>
+    </section>
+
+    <div class="glow-line"></div>
+
+    <!-- SENSORS -->
+    <section id="sensors">
+        <div class="section-header fade-in">
+            <div class="label">Sensors & Filtering</div>
+            <h2>Датчики и фильтрация</h2>
+            <p>Многоуровневая система фильтрации для надёжной работы в реальных условиях</p>
+        </div>
+        <div class="grid-2">
+            <div class="sensor-card fade-in">
+                <div class="sensor-icon">🔄</div>
+                <div class="sensor-info">
+                    <h4>MPU6050 — IMU 6-осевой</h4>
+                    <p>Акселерометр ±2G…±16G · Гироскоп ±250…±2000 °/с · I²C @ 400 кГц</p>
+                    <div class="spec">Калибровка: 200 сэмплов · Фильтр NaN/Inf · Таймаут I²C 3 мс</div>
+                </div>
+            </div>
+            <div class="sensor-card fade-in">
+                <div class="sensor-icon">🌡️</div>
+                <div class="sensor-info">
+                    <h4>BMP280 — Барометр</h4>
+                    <p>Диапазон 300…1100 гПа · Точность ±1 м · I²C (0x76 / 0x77)</p>
+                    <div class="spec">Медианный фильтр 3 отсчёта · Fall-safe при отказе → RECOVERY</div>
+                </div>
+            </div>
+            <div class="sensor-card fade-in">
+                <div class="sensor-icon">🔢</div>
+                <div class="sensor-info">
+                    <h4>Фильтр Маджвика (комплементарный)</h4>
+                    <p>Слияние гироскопа (интегрирование кватерниона) с акселерометром</p>
+                    <div class="spec">α = 0.95 · Защита от NaN/Inf · Нормализация кватерниона</div>
+                </div>
+            </div>
+            <div class="sensor-card fade-in">
+                <div class="sensor-icon">📊</div>
+                <div class="sensor-info">
+                    <h4>Вертикальная скорость</h4>
+                    <p>Скользящее окно высот для вычисления скорости снижения/подъёма</p>
+                    <div class="spec">Окно 25 отсчётов (0.5 с) · Защита от выбросов</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <div class="glow-line"></div>
+
+    <!-- SIMULATION -->
+    <section id="simulation">
+        <div class="section-header fade-in">
+            <div class="label">Simulation & Training</div>
+            <h2>Симулятор и обучение</h2>
+            <p>Физически точный 6-DOF симулятор с 10 видами неидеальностей</p>
+        </div>
+        <div class="sim-stats fade-in">
+            <div class="sim-stat"><div class="number">30K+</div><div class="label">Эпизодов</div></div>
+            <div class="sim-stat"><div class="number">6-DOF</div><div class="label">Степеней свободы</div></div>
+            <div class="sim-stat"><div class="number">RK4</div><div class="label">Интегратор</div></div>
+            <div class="sim-stat"><div class="number">10</div><div class="label">Типов неидеальностей</div></div>
+            <div class="sim-stat"><div class="number">200/150/80</div><div class="label">Hidden слои</div></div>
+        </div>
+        <div class="grid-2">
+            <div class="card fade-in">
+                <h3>🌪️ Неидеальности симулятора</h3>
+                <p style="margin-bottom:16px;">Для робастности обучения симулятор включает реалистичные возмущения:</p>
+                <div class="imperfections">
+                    <div class="imperfection-item"><span class="badge-imp">#1</span> NEU-стандарт осей body Z</div>
+                    <div class="imperfection-item"><span class="badge-imp">#2</span> τ серв = 0.2 с (MG995)</div>
+                    <div class="imperfection-item"><span class="badge-imp">#3</span> Лимит скорости серв 300°/с</div>
+                    <div class="imperfection-item"><span class="badge-imp">#4</span> Ветер Орнштейна-Уленбека</div>
+                    <div class="imperfection-item"><span class="badge-imp">#5</span> Вибрация 50-200 Гц</div>
+                    <div class="imperfection-item"><span class="badge-imp">#6</span> Дрейф эксцентриситета тяги</div>
+                    <div class="imperfection-item"><span class="badge-imp">#7</span> Смещение ЦД при выгорании</div>
+                    <div class="imperfection-item"><span class="badge-imp">#8</span> Изменение момента инерции</div>
+                    <div class="imperfection-item"><span class="badge-imp">#9</span> Просадки и хвост тяги</div>
+                    <div class="imperfection-item"><span class="badge-imp">#10</span> Дрейф нуля + сбои I²C</div>
+                </div>
+            </div>
+            <div class="card fade-in">
+                <h3>📐 Метрики обучения</h3>
+                <table class="specs-table">
+                    <tr><td>Метод</td><td>Behavioral Cloning</td></tr>
+                    <tr><td>Политики генерации</td><td>Random (15%) / PD (25%) / Mixed (30%) / Explore (30%)</td></tr>
+                    <tr><td>Функция потерь</td><td>MSE (Mean Squared Error)</td></tr>
+                    <tr><td>Активации</td><td>ReLU (hidden) · Tanh (output)</td></tr>
+                    <tr><td>Нормализация</td><td>LayerNorm после каждого скрытого слоя</td></tr>
+                    <tr><td>Scaler</td><td>StandardScaler (mean/std по датасету)</td></tr>
+                    <tr><td>Экспорт</td><td>TensorFlow → C++ float массивы</td></tr>
+                </table>
+            </div>
+        </div>
+        <div class="card fade-in" style="margin-top:24px;">
+            <h3>📝 Фрагмент архитектуры симулятора</h3>
+            <div class="code-block">
+                <span class="comment"># FastRocketSim — 6-DOF симулятор с неидеальностями</span><br>
+                <br>
+                <span class="keyword">class</span> FastRocketSim:<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;<span class="keyword">def</span> <span class="type">reset</span>(self) <span class="keyword">→</span> np.ndarray:<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment"># Масса, аэродинамика, ветер, дрейф — всё с разбросом</span><br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;mass_factor = np.random.uniform(<span class="number">0.8</span>, <span class="number">1.2</span>)<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.mass_dry = self.base_mass_dry * mass_factor<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.wind_process = WindProcess(mean_wind, theta, sigma)<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.gyro_bias = np.deg2rad(np.random.uniform(<span class="number">-1.0</span>, <span class="number">1.0</span>, <span class="number">3</span>))<br>
+                <br>
+                &nbsp;&nbsp;&nbsp;&nbsp;<span class="keyword">def</span> <span class="type">step</span>(self, action):<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment"># RK4 + ветер + шум датчиков + сбои I²C</span><br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.wind = self.wind_process.step(dt)<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;acc_noisy = acc_body + self.acc_bias + np.random.randn(<span class="number">3</span>) * acc_noise_std<br>
+                &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="keyword">return</span> acc_noisy, done, info
+            </div>
+        </div>
+    </section>
+
+    <div class="glow-line"></div>
+
+    <!-- FIRMWARE -->
+    <section id="firmware">
+        <div class="section-header fade-in">
+            <div class="label">Firmware</div>
+            <h2>Бортовое ПО (ESP32)</h2>
+            <p>Ключевые особенности прошивки rocket_controller.cpp</p>
+        </div>
+        <div class="grid-2">
+            <div class="card fade-in">
+                <h3>🔧 Исправления v3</h3>
+                <ul>
+                    <li><span class="fix-badge">FIX#1</span> Гироскопическая кинематика — исправлены знаки в qy_g и qz_g</li>
+                    <li><span class="fix-badge">FIX#2</span> Конечный автомат — детект отсечки, апогея, таймаут ARMED</li>
+                    <li><span class="fix-badge">FIX#3</span> Rate-limiter серв — SERVO_MAX_DELTA = 4 (~111 °/с)</li>
+                    <li><span class="fix-badge">FIX#4</span> Медианный фильтр BMP280 + fall-safe при отказе</li>
+                    <li><span class="fix-badge">FIX#5</span> Парашют — one-shot импульс 1 с, пиропатрон на пине 32</li>
+                    <li><span class="fix-badge">FIX#6</span> Детект посадки по вертикальной скорости ≈ 0</li>
+                    <li><span class="fix-badge">FIX#7</span> Watchdog сброс в начале loop</li>
+                </ul>
+            </div>
+            <div class="card fade-in">
+                <h3>⚙️ Цикл управления (50 Гц)</h3>
+                <div class="code-block" style="font-size:12px;">
+                    <span class="keyword">void</span> <span class="type">loop</span>() {<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;esp_task_wdt_reset();  <span class="comment">// [FIX#7]</span><br>
+                    <br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// 1. Чтение датчиков</span><br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;read_mpu();              <span class="comment">// MPU6050</span><br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;bmp_median_filter(raw);  <span class="comment">// BMP280</span><br>
+                    <br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// 2. Фильтр ориентации</span><br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;update_filter(gx, gy, gz, ax, ay, az, DT);<br>
+                    <br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// 3. Конечный автомат + нейросеть</span><br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;<span class="keyword">switch</span> (flight_state) {<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="keyword">case</span> STATE_ASCENT:<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;run_neural_control();<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="keyword">break</span>;<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// ...</span><br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;}<br>
+                    <br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;<span class="comment">// 4. Телеметрия + SD-лог</span><br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;log_telemetry();<br>
+                    &nbsp;&nbsp;&nbsp;&nbsp;log_csv();<br>
+                    }
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <div class="glow-line"></div>
+
+    <!-- ABOUT -->
+    <section id="about" style="text-align:center;padding-bottom:60px;">
+        <div class="section-header fade-in">
+            <div class="label">Project NOVA · by liquefield</div>
+            <h2>Ракета под управлением ИИ</h2>
+            <p style="max-width:600px;margin:16px auto;">
+                Полностью open-source проект: от симуляции и тренировки нейросети 
+                до бортового кода на ESP32. Все исходники доступны на 
+                <a href="https://github.com/liquefield-maxouiy/rocket-ai-controller" target="_blank" style="color:var(--accent-cyan);text-decoration:none;border-bottom:1px solid var(--accent-cyan);">GitHub</a>.
+            </p>
+        </div>
+        <div class="grid-3" style="max-width:800px;margin:0 auto;">
+            <div class="card fade-in">
+                <div class="icon">🧪</div>
+                <h3>sim.py</h3>
+                <p>6-DOF симулятор с RK4, аэродинамикой, ветром и 10 неидеальностями</p>
+            </div>
+            <div class="card fade-in">
+                <div class="icon">📈</div>
+                <h3>train.py</h3>
+                <p>Тренировка нейросети behavioral cloning на 30K+ эпизодах</p>
+            </div>
+            <div class="card fade-in">
+                <div class="icon">📡</div>
+                <h3>rocket_controller.cpp</h3>
+                <p>Бортовой код для ESP32: 50 Гц, нейросеть, фильтр Маджвика, FSM</p>
+            </div>
+        </div>
+        <div class="hero-cta" style="justify-content:center;margin-top:60px;">
+            <a href="#overview" class="btn btn-primary">Наверх →</a>
+        </div>
+    </section>
+
+</div>
+
+<footer>
+    <div class="links">
+        <span>PROJECT NOVA</span>
+        <span>·</span>
+        <span>AI-Powered Rocket Control</span>
+        <span>·</span>
+        <span>ESP32 · TensorFlow · 6-DOF</span>
+        <span>·</span>
+        <a href="https://t.me/liquefield" target="_blank">Telegram</a>
+        <span>·</span>
+        <a href="https://github.com/liquefield-maxouiy/rocket-ai-controller" target="_blank">GitHub</a>
+    </div>
+    <div>© 2026 <strong style="color:var(--accent-cyan)">liquefield</strong> — Open Source · Built with precision engineering</div>
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--border-color);font-size:10px;color:var(--text-secondary);opacity:0.6;max-width:600px;margin-left:auto;margin-right:auto;line-height:1.5;">
+        This is a fan-made collaboration. Not affiliated with SpaceX or ESA.
+    </div>
+</footer>
+
+<script>
+// Particle System
+const canvas = document.getElementById('particle-canvas');
+const ctx = canvas.getContext('2d');
+let particles = [];
+let mouseX = 0, mouseY = 0;
+
+function resizeCanvas() { canvas.width = window.innerWidth; canvas.height = window.innerHeight; }
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+
+class Particle {
+    constructor() {
+        this.x = Math.random() * canvas.width;
+        this.y = Math.random() * canvas.height;
+        this.size = Math.random() * 2 + 0.5;
+        this.speedX = (Math.random() - 0.5) * 0.3;
+        this.speedY = (Math.random() - 0.5) * 0.3;
+        this.opacity = Math.random() * 0.5 + 0.1;
+    }
+    update() {
+        this.x += this.speedX; this.y += this.speedY;
+        if (this.x < 0) this.x = canvas.width; if (this.x > canvas.width) this.x = 0;
+        if (this.y < 0) this.y = canvas.height; if (this.y > canvas.height) this.y = 0;
+        const dx = this.x - mouseX, dy = this.y - mouseY, dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < 150) { this.x += dx * 0.005; this.y += dy * 0.005; }
+    }
+    draw() {
+        ctx.beginPath(); ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(0, 212, 255, ${this.opacity})`; ctx.fill();
+    }
+}
+
+for (let i = 0; i < 120; i++) particles.push(new Particle());
+
+function animate() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    particles.forEach(p => { p.update(); p.draw(); });
+    for (let i = 0; i < particles.length; i++) {
+        for (let j = i + 1; j < particles.length; j++) {
+            const dx = particles[i].x - particles[j].x, dy = particles[i].y - particles[j].y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist < 150) {
+                ctx.beginPath(); ctx.moveTo(particles[i].x, particles[i].y); ctx.lineTo(particles[j].x, particles[j].y);
+                ctx.strokeStyle = `rgba(0, 212, 255, ${0.06 * (1 - dist / 150)})`;
+                ctx.lineWidth = 0.5; ctx.stroke();
+            }
+        }
+    }
+    requestAnimationFrame(animate);
+}
+animate();
+
+document.addEventListener('mousemove', e => { mouseX = e.clientX; mouseY = e.clientY; });
+
+// Scroll Progress
+const progressBar = document.getElementById('progressBar');
+window.addEventListener('scroll', () => {
+    const p = (document.documentElement.scrollTop / (document.documentElement.scrollHeight - window.innerHeight)) * 100;
+    progressBar.style.width = p + '%';
+});
+
+// Intersection Observer
+const observer = new IntersectionObserver(entries => {
+    entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); observer.unobserve(e.target); } });
+}, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
+document.querySelectorAll('.fade-in').forEach(el => observer.observe(el));
+
+// Flame flicker
+setInterval(() => { const f = document.querySelector('.flame'); if (f) f.style.opacity = 0.7 + Math.random() * 0.3; }, 100);
+
+// Console
+console.log(`\n  ╔══════════════════════════════════════╗\n  ║        PROJECT NOVA                  ║\n  ║  AI-Powered Rocket Control System    ║\n  ║        by liquefield                 ║\n  ║                                      ║\n  ║  ESP32 · TensorFlow · 6-DOF Sim     ║\n  ║  Behavioral Cloning · 50 Hz Loop    ║\n  ╚══════════════════════════════════════╝\n`);
+</script>
+</body>
+</html>
