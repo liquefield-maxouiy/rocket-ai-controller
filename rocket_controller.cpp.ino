@@ -31,7 +31,6 @@
  *   [FIX#5] Парашют:
  *           - Раскомментирован и доработан код управления пиропатроном (пин 32).
  *           - One-shot защита: импульс 1 с, однократно.
- *           - Резервный парашют на высоте 30 м, если основной не сработал.
  *           - pinMode вынесен в setup().
  *   [FIX#6] Добавлен детект посадки (вертикальная скорость ≈ 0 в RECOVERY).
  *   [FIX#7] Watchdog сброс теперь гарантирован даже при возврате из loop
@@ -45,6 +44,7 @@
 #include <MPU6050.h>
 #include <esp_task_wdt.h>
 #include <cmath>
+#include <SD.h>
 #include "rocket_model.h"
 
 // ── Сеть ──────────────────────────────────────────────────
@@ -87,6 +87,10 @@
 #define RECOVERY_ALT_THRESH     30.0f   // [FIX#5] резервный парашют
 #define LANDING_VS_THRESH       0.5f    // [FIX#6] порог вертикальной скорости посадки
 #define ARMING_TIMEOUT_SEC      120     // [FIX#2] таймаут ARMED → GROUND
+
+// ── SD-карта ──────────────────────────────────────────────
+#define SD_CS_PIN              4       // пин CS/SS для SD-модуля (обычно 5 на ESP32)
+#define SD_LOG_FLUSH_INTERVAL  50      // сбрасывать буфер SD каждые 50 циклов (~1 с)
 
 // ── Диагностика ───────────────────────────────────────────
 #define TELEMETRY_PERIOD        25      // ~2 Гц
@@ -163,6 +167,61 @@ uint32_t loop_counter = 0;
 
 // ── Watchdog ──────────────────────────────────────────────
 #define MY_WDT_TIMEOUT_SEC 3
+
+// ── SD-карта ──────────────────────────────────────────────
+File sd_file;
+bool sd_ok = false;
+uint32_t sd_flush_counter = 0;
+char  sd_log_name[32];
+
+// ── Вспомогательные функции для дублирования логов в Serial + SD ──
+void sd_print(const char *s) {
+    Serial.print(s);
+    if (sd_ok) sd_file.print(s);
+}
+
+void sd_println(const char *s) {
+    Serial.println(s);
+    if (sd_ok) sd_file.println(s);
+}
+
+void sd_printf(const char *prefix, float val, int decimals) {
+    Serial.print(prefix);
+    Serial.print(val, decimals);
+    if (sd_ok) { sd_file.print(prefix); sd_file.print(val, decimals); }
+}
+
+void sd_printf(const char *prefix, int val) {
+    Serial.print(prefix);
+    Serial.print(val);
+    if (sd_ok) { sd_file.print(prefix); sd_file.print(val); }
+}
+
+void sd_printf(const char *prefix, const char *val) {
+    Serial.print(prefix);
+    Serial.print(val);
+    if (sd_ok) { sd_file.print(prefix); sd_file.print(val); }
+}
+
+void sd_println_prefix(const char *prefix, float val, int decimals) {
+    Serial.print(prefix);
+    Serial.println(val, decimals);
+    if (sd_ok) { sd_file.print(prefix); sd_file.println(val, decimals); }
+}
+
+void sd_println_prefix(const char *prefix, int val) {
+    Serial.print(prefix);
+    Serial.println(val);
+    if (sd_ok) { sd_file.print(prefix); sd_file.println(val); }
+}
+
+void sd_print_raw(const char *s) {
+    if (sd_ok) sd_file.print(s);
+}
+
+void sd_flush() {
+    if (sd_ok) sd_file.flush();
+}
 
 // ════════════════════════════════════════════════════════════
 // Медианный фильтр (для барометра) — [FIX#4]
@@ -540,6 +599,10 @@ void deploy_parachute_main() {
     chute1_deploy_time = millis();
     digitalWrite(PARACHUTE_PIN, HIGH);
     Serial.println("PARACHUTE: MAIN deployed (pin 32 HIGH)");
+    if (sd_ok) {
+        sd_file.println("PARACHUTE: MAIN deployed (pin 32 HIGH)");
+        sd_file.flush();
+    }
 }
 
 void deploy_parachute_backup() {
@@ -547,6 +610,10 @@ void deploy_parachute_backup() {
     chute2_deployed = true;
     digitalWrite(PARACHUTE2_PIN, HIGH);
     Serial.println("PARACHUTE: BACKUP deployed (pin 33 HIGH)");
+    if (sd_ok) {
+        sd_file.println("PARACHUTE: BACKUP deployed (pin 33 HIGH)");
+        sd_file.flush();
+    }
 }
 
 // [FIX#5] Снятие импульса основного парашюта через 1 секунду
@@ -587,11 +654,41 @@ void log_telemetry() {
     Serial.println();
 }
 
+// ── Логирование каждого цикла в CSV-строку на SD ──
+void log_csv() {
+    if (!sd_ok) return;
+    uint32_t t = millis();
+    uint8_t st = (uint8_t)flight_state;
+    float accG = sqrt(ax*ax + ay*ay + az*az) / 9.81f;
+    sd_file.print(t);         sd_file.print(',');
+    sd_file.print(st);        sd_file.print(',');
+    sd_file.print(altitude, 1); sd_file.print(',');
+    sd_file.print(vert_speed, 2); sd_file.print(',');
+    sd_file.print(accG, 2);   sd_file.print(',');
+    sd_file.print(servo_pwm[0]); sd_file.print(',');
+    sd_file.print(servo_pwm[1]); sd_file.print(',');
+    sd_file.print(servo_pwm[2]); sd_file.print(',');
+    sd_file.print(servo_pwm[3]); sd_file.print(',');
+    sd_file.print(chute1_deployed ? 'Y' : 'N'); sd_file.print(',');
+    sd_file.print(chute2_deployed ? 'Y' : 'N'); sd_file.print(',');
+    sd_file.print(qx, 6);     sd_file.print(',');
+    sd_file.print(qy, 6);     sd_file.print(',');
+    sd_file.print(qz, 6);     sd_file.print(',');
+    sd_file.print(qw, 6);     sd_file.print(',');
+    sd_file.println(temperature, 1);
+}
+
 void log_error(const char *msg) {
     Serial.print("ERROR [");
     Serial.print(millis());
     Serial.print("]: ");
     Serial.println(msg);
+    if (sd_ok) {
+        sd_file.print("ERROR [");
+        sd_file.print(millis());
+        sd_file.print("]: ");
+        sd_file.println(msg);
+    }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -603,6 +700,7 @@ void set_state(State new_state) {
     flight_state = new_state;
     state_entry_time = millis();
 
+    // Пишем в Serial
     Serial.print("STATE: ");
     switch (old) {
         case STATE_INIT: Serial.print("INIT"); break;
@@ -624,6 +722,32 @@ void set_state(State new_state) {
         case STATE_RECOVERY: Serial.print("RECOVERY"); break;
     }
     Serial.println();
+
+    // Дублируем на SD
+    if (sd_ok) {
+        sd_file.print("STATE: ");
+        switch (old) {
+            case STATE_INIT: sd_file.print("INIT"); break;
+            case STATE_GROUND: sd_file.print("GROUND"); break;
+            case STATE_ARMED: sd_file.print("ARMED"); break;
+            case STATE_ASCENT: sd_file.print("ASCENT"); break;
+            case STATE_COAST: sd_file.print("COAST"); break;
+            case STATE_DESCENT: sd_file.print("DESCENT"); break;
+            case STATE_RECOVERY: sd_file.print("RECOVERY"); break;
+        }
+        sd_file.print(" -> ");
+        switch (new_state) {
+            case STATE_INIT: sd_file.print("INIT"); break;
+            case STATE_GROUND: sd_file.print("GROUND"); break;
+            case STATE_ARMED: sd_file.print("ARMED"); break;
+            case STATE_ASCENT: sd_file.print("ASCENT"); break;
+            case STATE_COAST: sd_file.print("COAST"); break;
+            case STATE_DESCENT: sd_file.print("DESCENT"); break;
+            case STATE_RECOVERY: sd_file.print("RECOVERY"); break;
+        }
+        sd_file.println();
+        sd_file.flush();
+    }
 }
 
 // ════════════════════════════════════════════════════════════
@@ -742,6 +866,32 @@ void setup() {
     pinMode(PARACHUTE2_PIN, OUTPUT);
     digitalWrite(PARACHUTE2_PIN, LOW);
     Serial.println("Parachute pins: initialized (LOW)");
+
+    // ── SD-карта ────────────────────────────────────────────
+    pinMode(SD_CS_PIN, OUTPUT);
+    digitalWrite(SD_CS_PIN, HIGH);
+    delay(10);
+
+    if (!SD.begin(SD_CS_PIN)) {
+        Serial.println("SD: not found — logging to Serial only");
+        sd_ok = false;
+    } else {
+        // Формируем имя файла: log_YYYYMMDD_HHMMSS.csv
+        uint32_t now_ms = millis();
+        snprintf(sd_log_name, sizeof(sd_log_name), "log_%lu.csv", now_ms);
+        sd_file = SD.open(sd_log_name, FILE_WRITE);
+        if (sd_file) {
+            sd_ok = true;
+            Serial.print("SD: opened ");
+            Serial.println(sd_log_name);
+            // CSV-заголовок
+            sd_file.println("time_ms,state,alt,vs,accG,srv1,srv2,srv3,srv4,ch1,ch2,qx,qy,qz,qw,temp");
+            sd_file.flush();
+        } else {
+            Serial.println("SD: failed to create log file");
+            sd_ok = false;
+        }
+    }
 
     // ── Начальные показания высотомера ──────────────────────
     if (bmp_ok) {
@@ -1007,6 +1157,16 @@ void loop() {
     // ── 4. Телеметрия ──────────────────────────────────────
     if (loop_counter % TELEMETRY_PERIOD == 0) {
         log_telemetry();
+    }
+
+    // ── 5. CSV-логирование на SD (каждый цикл) ────────────
+    log_csv();
+
+    // ── 6. Периодический сброс буфера SD ──────────────────
+    sd_flush_counter++;
+    if (sd_flush_counter >= SD_LOG_FLUSH_INTERVAL) {
+        sd_flush_counter = 0;
+        sd_flush();
     }
 
     // ── Команды из монитора порта ──
