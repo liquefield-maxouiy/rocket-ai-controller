@@ -1,7 +1,7 @@
-# 🚀 Rocket AI Controller v2.1
+# 🚀 NOVA — AI-Powered Rocket Control System
 
-> **Neural Network Rocket Control System on ESP32.**  
-> Stabilization, autopilot, parachute deployment — all inside the microcontroller.
+> **Neural network-based rocket control system on ESP32.**  
+> Stabilization, autopilot, telemetry, parachute — all inside the microcontroller.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform: ESP32](https://img.shields.io/badge/Platform-ESP32-red)](https://www.espressif.com/)
@@ -9,30 +9,26 @@
 
 ---
 
-## 📖 About the Project
+## 🔥 What Is This?
 
-This is an **open-source rocket control system** that uses a **neural network** for real-time flight stabilization.  
+**NOVA** is a fully autonomous rocket control system that uses a **neural network** for real-time flight stabilization.
+
 The project includes:
-
-- **Data Generation** (`sim.py`) — flight simulator with randomized conditions.
-- **Model Training** (`train.py`) — fully-connected neural network (45,733 parameters).
-- **Export to C++** (`export.py`) — weights for ESP32.
-- **ESP32 Firmware** (`rocket_controller.cpp.ino`) — state machine, sensors, servos, parachute.
+- **6-DOF simulator** (`sim.py`) — physically accurate rocket model with 10 types of imperfections.
+- **Neural network training** (`train.py`) — 45,733 parameters, trained on 30,000+ episodes.
+- **ESP32 flight code** (`rocket_controller.cpp.ino`) — 50 Hz, state machine, sensors, servos, parachute.
+- **Web control interface** — Wi-Fi access point, control from your phone without internet.
+- **SD card** — telemetry logging in CSV (50 Hz).
 
 ---
 
-## 🔥 Key Features
+## 📡 Phone Control
 
-| Feature | Description |
-|---------|-------------|
-| **Neural Network** | 11 inputs (quat, omega, acc, angle), 3 outputs (pitch, yaw, roll) |
-| **State Machine** | 7 states: INIT → GROUND → ARMED → ASCENT → COAST → DESCENT → RECOVERY |
-| **Launch Detection** | Acceleration trigger > 2.5G (with false-trigger protection) |
-| **Servo Control** | X-configuration (4 fins), speed limiting, smooth startup |
-| **Parachute System** | Primary + backup channels, manual test via `p` command |
-| **Telemetry** | Serial monitor output: altitude, velocity, state, servo positions |
-| **Watchdog** | Hardware timer (3 sec) — crash protection |
-| **Calibration** | Automatic MPU6050 and BMP280 calibration on startup |
+| What | How |
+| :--- | :--- |
+| **Connect to Wi-Fi** | Network `NOVA_ROCKET`, password `rocket123` |
+| **Open website** | `http://192.168.4.1` in your browser |
+| **Control** | ARM, LAUNCH, ABORT buttons + real-time telemetry |
 
 ---
 
@@ -40,30 +36,27 @@ The project includes:
 
 ### 1. Simulation & Training (on PC)
 ```bash
-python sim.py        # generate data (10,000 episodes)
-python train.py      # train neural network (~30 minutes)
+python sim.py        # data generation (10,000 episodes)
+python train.py      # neural network training
 python export.py     # export weights to rocket_model.h
 ```
 
-### 2. ESP32 Firmware Upload
+### 2. Flashing ESP32
+```bash
+# Upload rocket_controller.cpp.ino in Arduino IDE
+# Select board: ESP32 Dev Module
+# Click "Upload"
+```
 
-> Load rocket_controller.cpp.ino in Arduino IDE
-> Select board: ESP32 Dev Module
-> Click "Upload"
-
-### 3. Serial Monitor Commands
-
-| Command | Action |
-|---------|--------|
-| `a` | Transition from GROUND to ARMED (prepare for launch) |
-| `t` | Force transition to ASCENT (test mode) |
-| `p` | Manual parachute test (pin 32 → HIGH for 1 second) |
+### 3. Field Launch
+- Power on ESP32, BEC, servos.
+- Connect to `NOVA_ROCKET` from your phone.
+- Open `http://192.168.4.1`.
+- Press **ARM**, then **LAUNCH**.
 
 ---
 
-## 📦 Hardware Setup
-
-### Wiring Diagram
+## 🔌 Wiring Diagram
 
 | Component | ESP32 Pin |
 |-----------|-----------|
@@ -76,20 +69,13 @@ python export.py     # export weights to rocket_model.h
 | SERVO3        | GPIO15 |
 | SERVO4        | GPIO16 |
 | Parachute (signal) | GPIO32 |
+| SD Card (CS) | GPIO4 |
 
-### Power Supply
-
-| Device | Power |
-|--------|-------|
-| ESP32 | USB or 5V from BEC |
-| MPU6050, BMP280 | 3.3V from ESP32 |
-| MG996R Servos | 5V from BEC (3-5A) |
-
-⚠️ **Important:** Power servos from a separate BEC, NOT from the ESP32!
+⚠️ **Servos must be powered from a separate 5V 5A BEC!** ESP32 cannot drive MG995 servos directly.
 
 ---
 
-## 🚀 Flight Modes (State Machine)
+## 📊 State Machine
 
 ```
 INIT → GROUND → ARMED → ASCENT → COAST → DESCENT → RECOVERY
@@ -98,27 +84,38 @@ INIT → GROUND → ARMED → ASCENT → COAST → DESCENT → RECOVERY
 | State | Description |
 |-------|-------------|
 | **INIT** | Sensor calibration, servo initialization |
-| **GROUND** | Waiting for `a` command to transition to ARMED |
-| **ARMED** | Monitoring acceleration (waiting for launch > 2.5G) |
-| **ASCENT** | Active neural network control, motor burning |
+| **GROUND** | Waiting for ARM command |
+| **ARMED** | Acceleration monitoring (waiting for launch > 2.5G) |
+| **ASCENT** | Neural network controls, motor running |
 | **COAST** | Motor off, ballistic flight |
-| **DESCENT** | Descending, preparing for parachute deployment |
+| **DESCENT** | Descending, preparing for parachute |
 | **RECOVERY** | Parachute deployed, landing |
+
+---
+
+## 🛠️ Hardware
+
+| Component | Model |
+|-----------|-------|
+| Microcontroller | ESP32 @ 240 MHz |
+| IMU | MPU6050 (6-axis, I²C) |
+| Barometer | BMP280 (±1 m, I²C) |
+| Servos | 4× MG995 (X-config) |
+| Parachute | 2× igniter (main + backup) |
+| Logging | SD card (CSV @ 50 Hz) |
+| Control | Wi-Fi access point |
+| Watchdog | Hardware, 3 sec |
 
 ---
 
 ## 🧪 Testing
 
-### 1. Sensor Check
-After uploading the firmware, open the serial monitor and verify:
-- `MPU6050: initialized and responding`
-- `BMP280: found at 0x76`
-
-### 2. Parachute Test
-Send command `p` — the LED on pin 32 should light up for 1 second.
-
-### 3. Servo Test
-Send command `a`, then `t` — servos should start moving (neural network activates).
+| Command (Serial) | Action |
+|------------------|--------|
+| `a` | Transition GROUND → ARMED |
+| `t` | Force transition to ASCENT (test) |
+| `p` | Manual parachute test (pin 32) |
+| `d` | Force transition from COAST to DESCENT |
 
 ---
 
@@ -135,19 +132,37 @@ S:RECOVERY alt=299.5 vs=-1.12 acc=0.99G srv=90,90,90,90 ch1=Y ch2=N
 
 ---
 
+## 📁 Project Structure
+
+```
+rocket-ai-controller/
+├── sim.py                    # 6-DOF simulator
+├── train.py                  # Neural network training
+├── export.py                 # Export to C++
+├── rocket_controller.cpp.ino # ESP32 firmware
+├── rocket_model.h            # Model weights
+├── index.html                # Web control interface
+└── README.md                 # You are here
+```
+
+---
+
 ## 📄 License
 
-MIT — do whatever you want, but if the rocket crashes, it's on you. 
+MIT — do whatever you want, but if the rocket crashes, it's your own fault.
 
 ---
 
 ## 🔗 Links
 
-- Repository: [github.com/liquefield-maxouiy/rocket-ai-controller](https://github.com/liquefield-maxouiy/rocket-ai-controller)  
-- Release v2.1: [github.com/liquefield-maxouiy/rocket-ai-controller/releases/tag/v2.1](https://github.com/liquefield-maxouiy/rocket-ai-controller/releases/tag/v2.1)
+- Repository: [github.com/liquefield-maxouiy/rocket-ai-controller](https://github.com/liquefield-maxouiy/rocket-ai-controller)
+- Releases: [github.com/liquefield-maxouiy/rocket-ai-controller/releases](https://github.com/liquefield-maxouiy/rocket-ai-controller/releases)
+- Project website: [liquefield-maxouiy.github.io/rocket-ai-controller](https://liquefield-maxouiy.github.io/rocket-ai-controller)
 
 ---
 
-**🚀 To the stars!**
+**🚀 Onward, to the stars!**
+
+---
 
 # **THIS IS A ROCKET MODEL; THE DEVELOPER IS NOT RESPONSIBLE FOR YOUR ACTIONS.**

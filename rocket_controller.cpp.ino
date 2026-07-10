@@ -43,6 +43,8 @@
 #include <ESP32Servo.h>
 #include <MPU6050.h>
 #include <esp_task_wdt.h>
+#include <WiFi.h>
+#include <WebServer.h>
 #include <cmath>
 #include <SD.h>
 #include "rocket_model.h"
@@ -87,6 +89,12 @@
 #define RECOVERY_ALT_THRESH     30.0f   // [FIX#5] резервный парашют
 #define LANDING_VS_THRESH       0.5f    // [FIX#6] порог вертикальной скорости посадки
 #define ARMING_TIMEOUT_SEC      120     // [FIX#2] таймаут ARMED → GROUND
+
+// ── Wi-Fi (точка доступа) ─────────────────────────────────
+#define WIFI_SSID              "NOVA_ROCKET"
+#define WIFI_PASS              "rocket123"
+#define WIFI_CHANNEL           1
+#define WIFI_MAX_CONNECT       4
 
 // ── SD-карта ──────────────────────────────────────────────
 #define SD_CS_PIN              4       // пин CS/SS для SD-модуля (обычно 5 на ESP32)
@@ -221,6 +229,319 @@ void sd_print_raw(const char *s) {
 
 void sd_flush() {
     if (sd_ok) sd_file.flush();
+}
+
+// ── Веб-сервер ─────────────────────────────────────────────
+WebServer server(80);
+
+// ── Сборка главной HTML-страницы с тёмной неоновой темой ──
+String build_web_page() {
+    String page = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no">
+<title>NOVA ROCKET</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+body{
+  background:#0a0a0f;
+  color:#e0e0e0;
+  font-family:'Segoe UI',system-ui,-apple-system,sans-serif;
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  padding:16px;
+}
+.container{
+  width:100%;
+  max-width:400px;
+  text-align:center;
+}
+h1{
+  font-size:2.2rem;
+  font-weight:800;
+  background:linear-gradient(135deg,#00f5ff,#b300ff);
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+  margin-bottom:8px;
+  letter-spacing:2px;
+  text-shadow:0 0 30px rgba(0,245,255,0.3);
+}
+.subtitle{
+  color:#888;
+  font-size:0.85rem;
+  margin-bottom:24px;
+  letter-spacing:1px;
+  text-transform:uppercase;
+}
+.card{
+  background:linear-gradient(145deg,#12121a,#1a1a2e);
+  border:1px solid rgba(0,245,255,0.15);
+  border-radius:16px;
+  padding:24px 20px;
+  margin-bottom:16px;
+  box-shadow:0 8px 32px rgba(0,0,0,0.6);
+}
+.status-box{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:12px;
+  margin-bottom:8px;
+}
+.status-dot{
+  width:14px;height:14px;
+  border-radius:50%;
+  background:#00ff88;
+  box-shadow:0 0 12px #00ff88;
+  animation:pulse 2s infinite;
+}
+.status-dot.armed{background:#ffaa00;box-shadow:0 0 12px #ffaa00;}
+.status-dot.flight{background:#ff0055;box-shadow:0 0 12px #ff0055;}
+.status-dot.landed{background:#00ff88;box-shadow:0 0 12px #00ff88;}
+.status-dot.error{background:#ff0044;box-shadow:0 0 12px #ff0044;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.5;}}
+#state-label{
+  font-size:1.8rem;
+  font-weight:700;
+  color:#fff;
+}
+.telemetry{
+  display:grid;
+  grid-template-columns:1fr 1fr 1fr;
+  gap:8px;
+  margin-top:12px;
+}
+.telemetry-item{
+  background:rgba(255,255,255,0.04);
+  border-radius:10px;
+  padding:8px 4px;
+}
+.telemetry-item .val{
+  font-size:1.2rem;
+  font-weight:600;
+  color:#00f5ff;
+}
+.telemetry-item .label{
+  font-size:0.7rem;
+  color:#666;
+  text-transform:uppercase;
+  margin-top:2px;
+}
+.buttons{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:10px;
+}
+.btn{
+  border:none;
+  border-radius:12px;
+  padding:14px 0;
+  font-size:1rem;
+  font-weight:700;
+  letter-spacing:1px;
+  text-transform:uppercase;
+  cursor:pointer;
+  transition:all 0.2s;
+  position:relative;
+  overflow:hidden;
+}
+.btn:active{transform:scale(0.95);}
+.btn-arm{
+  background:linear-gradient(135deg,#ff8800,#ff5500);
+  color:#fff;
+  box-shadow:0 4px 20px rgba(255,136,0,0.3);
+}
+.btn-launch{
+  background:linear-gradient(135deg,#ff0044,#cc0033);
+  color:#fff;
+  box-shadow:0 4px 20px rgba(255,0,68,0.3);
+}
+.btn-abort{
+  background:linear-gradient(135deg,#ff2222,#cc0000);
+  color:#fff;
+  box-shadow:0 4px 20px rgba(255,34,34,0.3);
+}
+.btn-status{
+  background:linear-gradient(135deg,#0044ff,#0022aa);
+  color:#fff;
+  box-shadow:0 4px 20px rgba(0,68,255,0.3);
+  grid-column:1/3;
+}
+.btn:disabled{
+  opacity:0.3;
+  cursor:not-allowed;
+  transform:none;
+}
+.toast{
+  position:fixed;
+  bottom:20px;
+  left:50%;
+  transform:translateX(-50%);
+  background:rgba(0,0,0,0.85);
+  color:#00f5ff;
+  padding:10px 24px;
+  border-radius:10px;
+  font-size:0.85rem;
+  border:1px solid rgba(0,245,255,0.3);
+  display:none;
+  backdrop-filter:blur(10px);
+  max-width:90%;
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>NOVA</h1>
+  <div class="subtitle">rocket control system</div>
+  <div class="card">
+    <div class="status-box">
+      <div class="status-dot" id="status-dot"></div>
+      <div id="state-label">--</div>
+    </div>
+    <div class="telemetry">
+      <div class="telemetry-item">
+        <div class="val" id="alt-val">0.0</div>
+        <div class="label">alt (m)</div>
+      </div>
+      <div class="telemetry-item">
+        <div class="val" id="vs-val">0.0</div>
+        <div class="label">v/s (m/s)</div>
+      </div>
+      <div class="telemetry-item">
+        <div class="val" id="acc-val">0.0</div>
+        <div class="label">acc (G)</div>
+      </div>
+    </div>
+  </div>
+  <div class="buttons">
+    <button class="btn btn-arm" id="btn-arm" onclick="sendCmd('arm')">ARM</button>
+    <button class="btn btn-launch" id="btn-launch" onclick="sendCmd('launch')">LAUNCH</button>
+    <button class="btn btn-status" id="btn-status" onclick="sendCmd('status')">&#x21bb; REFRESH</button>
+    <button class="btn btn-abort" id="btn-abort" onclick="sendCmd('abort')">ABORT</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+function showToast(msg){
+  const t=document.getElementById('toast');
+  t.textContent=msg;
+  t.style.display='block';
+  setTimeout(()=>{t.style.display='none';},2500);
+}
+function sendCmd(cmd){
+  const btn=document.querySelector(`[onclick*="'${cmd}'"]`);
+  if(btn) btn.disabled=true;
+  fetch('/'+cmd,{method:'POST'})
+    .then(r=>r.json())
+    .then(d=>{
+      if(d.status) showToast(d.status);
+      updateStatus(d);
+    })
+    .catch(()=>showToast('Connection error'))
+    .finally(()=>{if(btn) btn.disabled=false;});
+}
+function updateStatus(d){
+  if(!d) return;
+  const label=document.getElementById('state-label');
+  const dot=document.getElementById('status-dot');
+  const state=d.state||'UNKNOWN';
+  label.textContent=state;
+  dot.className='status-dot';
+  if(state==='GROUND') dot.classList.add('landed');
+  else if(state==='ARMED') dot.classList.add('armed');
+  else if(state==='ASCENT'||state==='COAST') dot.classList.add('flight');
+  else if(state==='DESCENT'||state==='RECOVERY') dot.classList.add('flight');
+  else dot.classList.add('error');
+  if(d.alt!==undefined) document.getElementById('alt-val').textContent=d.alt.toFixed(1);
+  if(d.vs!==undefined) document.getElementById('vs-val').textContent=d.vs.toFixed(1);
+  if(d.acc!==undefined) document.getElementById('acc-val').textContent=d.acc.toFixed(2);
+}
+// Auto-refresh every 2 seconds
+setInterval(()=>{
+  fetch('/status')
+    .then(r=>r.json())
+    .then(d=>updateStatus(d))
+    .catch(()=>{});
+},2000);
+// Initial status fetch
+fetch('/status').then(r=>r.json()).then(d=>updateStatus(d));
+</script>
+</body>
+</html>
+)rawliteral";
+    return page;
+}
+
+// ── Вспомогательная: название состояния строкой ──
+const char* state_to_str(State s) {
+    switch (s) {
+        case STATE_INIT:     return "INIT";
+        case STATE_GROUND:   return "GROUND";
+        case STATE_ARMED:    return "ARMED";
+        case STATE_ASCENT:   return "ASCENT";
+        case STATE_COAST:    return "COAST";
+        case STATE_DESCENT:  return "DESCENT";
+        case STATE_RECOVERY: return "RECOVERY";
+        default:             return "UNKNOWN";
+    }
+}
+
+// ── JSON-статус ──
+void handle_status() {
+    String json = "{";
+    json += "\"state\":\"";       json += state_to_str(flight_state); json += "\",";
+    json += "\"alt\":";           json += String(altitude, 1);       json += ",";
+    json += "\"vs\":";            json += String(vert_speed, 2);     json += ",";
+    json += "\"acc\":";           json += String(sqrt(ax*ax + ay*ay + az*az) / 9.81f, 2); json += ",";
+    json += "\"temp\":";          json += String(temperature, 1);    json += ",";
+    json += "\"ch1\":";           json += chute1_deployed ? "1" : "0"; json += ",";
+    json += "\"ch2\":";           json += chute2_deployed ? "1" : "0"; json += ",";
+    json += "\"loop\":";          json += loop_counter;
+    json += "}";
+    server.send(200, "application/json", json);
+}
+
+// ── Обработчики команд ──
+void handle_root() {
+    server.send(200, "text/html", build_web_page());
+}
+
+void handle_cmd_arm() {
+    if (flight_state == STATE_GROUND) {
+        set_state(STATE_ARMED);
+        server.send(200, "application/json", "{\"status\":\"ARMED\"}");
+    } else {
+        server.send(200, "application/json", "{\"status\":\"can't ARM from current state\"}");
+    }
+}
+
+void handle_cmd_launch() {
+    if (flight_state == STATE_ARMED || flight_state == STATE_GROUND) {
+        set_state(STATE_ASCENT);
+        ascent_start_time = millis();
+        // Сбрасываем детекторы, как в loop()
+        burnout_confirm_counter = 0;
+        peak_thrust = sqrt(ax*ax + ay*ay + az*az) / 9.81f;
+        peak_altitude = altitude;
+        apogee_detected = false;
+        descent_confirm_counter = 0;
+        server.send(200, "application/json", "{\"status\":\"LAUNCH\"}");
+    } else {
+        server.send(200, "application/json", "{\"status\":\"can't LAUNCH from current state\"}");
+    }
+}
+
+void handle_cmd_abort() {
+    set_state(STATE_GROUND);
+    launch_confirm_counter = 0;
+    burnout_confirm_counter = 0;
+    descent_confirm_counter = 0;
+    server.send(200, "application/json", "{\"status\":\"ABORT → GROUND\"}");
 }
 
 // ════════════════════════════════════════════════════════════
@@ -867,6 +1188,24 @@ void setup() {
     digitalWrite(PARACHUTE2_PIN, LOW);
     Serial.println("Parachute pins: initialized (LOW)");
 
+    // ── Wi-Fi точка доступа ─────────────────────────────────
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(WIFI_SSID, WIFI_PASS, WIFI_CHANNEL, 0, WIFI_MAX_CONNECT);
+    delay(200);
+    Serial.print("WiFi AP: ");
+    Serial.print(WIFI_SSID);
+    Serial.print(" IP: ");
+    Serial.println(WiFi.softAPIP());
+
+    // ── Веб-сервер ──────────────────────────────────────────
+    server.on("/",                handle_root);
+    server.on("/status",          handle_status);
+    server.on("/arm", HTTP_POST,  handle_cmd_arm);
+    server.on("/launch", HTTP_POST, handle_cmd_launch);
+    server.on("/abort", HTTP_POST, handle_cmd_abort);
+    server.begin();
+    Serial.println("Web server: started on port 80");
+
     // ── SD-карта ────────────────────────────────────────────
     pinMode(SD_CS_PIN, OUTPUT);
     digitalWrite(SD_CS_PIN, HIGH);
@@ -1168,6 +1507,9 @@ void loop() {
         sd_flush_counter = 0;
         sd_flush();
     }
+
+    // ── 7. Обработка веб-запросов ──────────────────────────
+    server.handleClient();
 
     // ── Команды из монитора порта ──
     if (Serial.available()) {
