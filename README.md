@@ -5,7 +5,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Platform: ESP32](https://img.shields.io/badge/Platform-ESP32-red)](https://www.espressif.com/)
-[![Status: Flight Ready](https://img.shields.io/badge/Status-Flight%20Ready-brightgreen)](https://github.com/liquefield-maxouiy/rocket-ai-controller)
+[![Status: legacy](https://img.shields.io/badge/Status-legacy-cyan)](https://github.com/liquefield-maxouiy/rocket-ai-controller)
 
 ---
 
